@@ -36,11 +36,6 @@ function renderHome(){
   near.forEach(function(c){
     s += '<button class="near" data-act="pin" data-id="'+c.id+'"><span class="pic">'+photo(c)+'<span class="badge'+(c.open?' open':'')+'"><i></i>'+(c.open?'Open':'Closed')+'</span></span><span class="nt"><b>'+c.name+'</b><span class="m">'+c.area+' · '+fmt(distOf(c))+'</span></span></button>';
   });
-  var sv=cafes.filter(function(c){return state.saved[c.id]});
-  s += '</div><h2 class="sec" id="saved" style="scroll-margin-top:96px">Saved offers'+(sv.length?' ('+sv.length+')':'')+'</h2><div class="offers">';
-  if(sv.length){sv.forEach(function(c){
-    s += '<div class="offer"><div><b>'+c.offer+'</b><small>'+c.name+' · '+c.exp+'</small></div><button class="chip" data-act="save" data-id="'+c.id+'" aria-pressed="true">Saved</button></div>';
-  })} else {s += '<div class="hero"><span class="k">Nothing saved yet</span><p>Tap Save on an offer below to keep it here.</p></div>'}
   s += '</div><h2 class="sec">Offers for you</h2><div class="offers">';
   cafes.forEach(function(c){
     s += '<div class="offer"><div><b>'+c.offer+'</b><small>'+c.name+' · '+c.exp+'</small></div><button class="chip" data-act="save" data-id="'+c.id+'" aria-pressed="'+(!!state.saved[c.id])+'">'+(state.saved[c.id]?'Saved':'Save')+'</button></div>';
@@ -399,7 +394,8 @@ document.addEventListener('click',function(e){
     else if(act==='close')closeSheet();
     else if(act==='pin')selectPlace(id);
     else if(act==='save'){state.saved[id]=!state.saved[id];try{localStorage.setItem('cl-saved',JSON.stringify(state.saved))}catch(e){}renderHome();if(state.tab==='profile')renderProfile()}
-    else if(act==='savedgo'){setTab('home');setTimeout(function(){var e=$('#saved');if(e)e.scrollIntoView({behavior:'smooth',block:'start'})},80)}
+    else if(act==='savedgo'){openSaved()}
+    else if(act==='unsave'){state.saved[id]=false;try{localStorage.setItem('cl-saved',JSON.stringify(state.saved))}catch(e){}renderHome();renderProfile();openSaved()}
     else if(act==='join')openJoin(id);
     else if(act==='route'){
       state.route=state.route===id?null:id; refreshMap();
@@ -513,6 +509,11 @@ var CHV='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="cur
 function sw(on,act,id,label,dis){return '<button class="sw" role="switch" aria-checked="'+on+'" aria-label="'+label+'" data-act="'+act+'" data-id="'+id+'"'+(dis?' disabled':'')+'><i></i></button>'}
 function swRow(title,sub,on,key){return '<div class="pr"><span class="pt">'+title+(sub?'<small>'+sub+'</small>':'')+'</span>'+sw(on,'tgl',key,title,false)+'</div>'}
 function navRow(title,right,attrs){return '<button class="pr" '+attrs+'><span class="pt">'+title+'</span><span class="pv">'+right+CHV+'</span></button>'}
+function openSaved(){
+  var sv=cafes.filter(function(c){return state.saved[c.id]});
+  showSheet('<div class="grab"></div><div class="sh-head"><div><h3>Saved offers</h3><p>'+(sv.length?'Offers you saved from partner cafes.':'Nothing saved yet. Tap Save on an offer on the Home screen.')+'</p></div><button class="x" data-act="close" aria-label="Close">'+X_ICON+'</button></div>'+
+    sv.map(function(c){return '<div class="offer"><div><b>'+c.offer+'</b><small>'+c.name+' · '+c.exp+'</small></div><button class="chip" data-act="unsave" data-id="'+c.id+'">Remove</button></div>'}).join(''));
+}
 function renderProfile(){
   var list=joined(), m=state.me, off=!state.prefs.offers;
   var stamps=list.reduce(function(a,c){return a+c.stamps},0), ready=list.filter(function(c){return c.stamps>=GOAL}).length;
