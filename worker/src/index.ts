@@ -8,10 +8,13 @@
  *  - owners and managers manage their own cafe only
  */
 
+import { SCHEMA_STATEMENTS, SEED_STATEMENTS } from './sql.ts';
+
 export interface Env {
   DB: D1Database;
   MEDIA?: R2Bucket;        // photo storage (R2). Optional: without it, photo features answer 503 and everything else works
   ASSETS?: Fetcher;       // not used when the app is hosted separately
+  SEED_SAMPLE?: string;    // "0" = do not add the five sample cafes when the tables are first created
   DEV_OTP?: string;        // "1" = skip SMS, every code is 123456 (testing only)
   TWILIO_SID?: string;     // secrets: wrangler secret put TWILIO_SID, etc.
   TWILIO_TOKEN?: string;
@@ -33,6 +36,30 @@ const OTP_MINUTES = 5;
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 const IMAGE_TYPES: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 const PATTERNS = ['dots', 'stripes', 'rings', 'grid'];
+
+
+// ---------- first-use database setup ----------
+// If the D1 database is empty, create the tables (and the sample cafes) automatically.
+// This lets you set up from a phone with no SQL pasting. Later changes still go in migrations/.
+let dbReady: Promise<void> | null = null;
+async function tablesExist(env: Env): Promise<boolean> {
+  const t = await env.DB.prepare(`select name from sqlite_master where type = 'table' and name = 'users'`).first();
+  return !!t;
+}
+function ensureDb(env: Env): Promise<void> {
+  if (!dbReady) {
+    dbReady = (async () => {
+      if (await tablesExist(env)) return;
+      try {
+        await env.DB.batch(SCHEMA_STATEMENTS.map((q) => env.DB.prepare(q)));
+        if (env.SEED_SAMPLE !== '0') await env.DB.batch(SEED_STATEMENTS.map((q) => env.DB.prepare(q)));
+      } catch (e) {
+        if (!(await tablesExist(env))) throw e; // another request may have created them at the same moment
+      }
+    })().catch((e) => { dbReady = null; throw e; });
+  }
+  return dbReady;
+}
 
 // ---------- small helpers ----------
 function media(env: Env): R2Bucket {
@@ -624,6 +651,7 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
     try {
+      if (url.pathname.startsWith('/api/')) await ensureDb(env);
       for (const [method, re, handler] of routes) {
         if (req.method !== method) continue;
         const m = re.exec(url.pathname);

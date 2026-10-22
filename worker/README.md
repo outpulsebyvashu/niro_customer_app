@@ -39,3 +39,9 @@ Sign in returns a token. Send it as `Authorization: Bearer <token>`.
 
 D1 has no row-level security, so each rule is checked in `src/index.ts`. Customers cannot change their own stamps.
 `npm run test:api` runs about 35 checks against SQLite and an in-memory R2 (Node 22.7+, no installs).
+
+## Automatic first-time setup
+If the D1 database is empty, the API creates all tables and the five sample cafes on the first request to `/api/*`.
+So you can create an empty D1 database, bind it as `DB`, and deploy, with no SQL to paste. Set `SEED_SAMPLE` = `0` to skip the sample cafes.
+`src/sql.ts` is generated from `migrations/` and `seed.sql` (`python3 scripts/make-sql.py`). New database changes still go in new migration files.
+Test it with `npm run test:api:empty`.

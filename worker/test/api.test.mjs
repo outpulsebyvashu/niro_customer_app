@@ -9,8 +9,8 @@ const { default: worker } = await import(root + 'src/index.ts');
 // ---- tiny D1 and R2 stand-ins ----
 const sqlite = new DatabaseSync(':memory:');
 sqlite.exec('pragma foreign_keys = on');
-sqlite.exec(readFileSync(root + 'migrations/0001_init.sql', 'utf8'));
-sqlite.exec(readFileSync(root + 'seed.sql', 'utf8'));
+if (!process.env.EMPTY_DB) sqlite.exec(readFileSync(root + 'migrations/0001_init.sql', 'utf8')); // EMPTY_DB=1 tests the automatic first-use setup
+if (!process.env.EMPTY_DB) sqlite.exec(readFileSync(root + 'seed.sql', 'utf8'));
 const norm = (r) => (r === undefined ? null : { ...r });
 const stmt = (sql, args = []) => ({
   sql, args,

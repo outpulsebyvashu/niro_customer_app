@@ -10,7 +10,8 @@
     "db:seed:local": "wrangler d1 execute niro-customer --local --file=seed.sql",
     "db:seed": "wrangler d1 execute niro-customer --remote --file=seed.sql",
     "typecheck": "tsc --noEmit",
-    "test:api": "node --experimental-transform-types --no-warnings test/api.test.mjs"
+    "test:api": "node --experimental-transform-types --no-warnings test/api.test.mjs",
+    "test:api:empty": "EMPTY_DB=1 node --experimental-transform-types --no-warnings test/api.test.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20251001.0",
