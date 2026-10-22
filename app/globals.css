@@ -306,3 +306,8 @@ button{cursor:pointer;border:0;background:none}
 
 .attr{position:absolute;z-index:4;left:8px;bottom:calc(104px + env(safe-area-inset-bottom,0px));font-size:10px;color:var(--ink2);background:color-mix(in srgb,var(--bg) 78%,transparent);padding:2px 6px;border-radius:6px;text-decoration:none}
 #ava:active{transform:scale(.9)}#ava{transition:transform .2s cubic-bezier(.2,.8,.2,1)}
+#home>.hero,#wallet>.hero,#profile>.hero{padding:24px 22px;gap:14px}
+#home>.hero+.hero,#home>.hero+.sec{margin-top:16px}
+#home>.hero:last-child,#wallet>.hero:last-child{margin-bottom:20px}
+.hero p{color:var(--hero-ink);opacity:.8}
+.hero .btn{align-self:flex-start;margin-top:4px}
