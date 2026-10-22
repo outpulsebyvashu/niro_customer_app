@@ -9,6 +9,8 @@ import android.graphics.Color
 import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -50,6 +52,8 @@ class MainActivity : ComponentActivity() {
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var pendingSave: String? = null
     private var failed = false
+    private var lastBars = 0
+    private val handler = Handler(Looper.getMainLooper())
 
     private val locationPermission = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -301,24 +305,56 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface
         fun theme(dark: Boolean) {
-            runOnUiThread {
-                val bg = if (dark) Color.parseColor("#0B0B0B") else Color.parseColor("#F7F7F5")
-                window.statusBarColor = bg
-                window.navigationBarColor = bg
-                root.setBackgroundColor(bg)
-                val controller = WindowCompat.getInsetsController(window, window.decorView)
-                controller.isAppearanceLightStatusBars = !dark
-                controller.isAppearanceLightNavigationBars = !dark
+            runOnUiThread { applyBars(if (dark) Color.parseColor("#0B0B0B") else Color.parseColor("#F7F7F5")) }
+        }
+    }
+
+    /** Colours the status bar and the bottom system bar to match the page, with the right icon colour. */
+    private fun applyBars(bg: Int) {
+        if (bg == lastBars) return
+        lastBars = bg
+        window.statusBarColor = bg
+        window.navigationBarColor = bg
+        root.setBackgroundColor(bg)
+        val light = (0.299 * Color.red(bg) + 0.587 * Color.green(bg) + 0.114 * Color.blue(bg)) > 150
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        controller.isAppearanceLightStatusBars = light
+        controller.isAppearanceLightNavigationBars = light
+    }
+
+    private fun parseCssColor(raw: String?): Int? {
+        val v = raw?.trim()?.trim('"')?.trim() ?: return null
+        if (v.startsWith("#")) {
+            return try {
+                when (v.length) {
+                    4 -> Color.parseColor("#" + v[1] + v[1] + v[2] + v[2] + v[3] + v[3])
+                    7 -> Color.parseColor(v)
+                    else -> null
+                }
+            } catch (e: IllegalArgumentException) { null }
+        }
+        val m = Regex("""rgba?\((\d+)[ ,]+(\d+)[ ,]+(\d+)""").find(v) ?: return null
+        val (r, g, b) = m.destructured
+        return Color.rgb(r.toInt(), g.toInt(), b.toInt())
+    }
+
+    private val barPoll = object : Runnable {
+        override fun run() {
+            if (offline.visibility != View.VISIBLE) {
+                web.evaluateJavascript(BG_JS) { raw -> parseCssColor(raw)?.let { applyBars(it) } }
             }
+            handler.postDelayed(this, 700)
         }
     }
 
     override fun onResume() {
         super.onResume()
         web.onResume()
+        handler.post(barPoll)
     }
 
     override fun onPause() {
+        handler.removeCallbacks(barPoll)
         CookieManager.getInstance().flush()
         web.onPause()
         super.onPause()
@@ -337,6 +373,9 @@ class MainActivity : ComponentActivity() {
     companion object {
         private const val HOST = "niro.cards"
         private const val HOME = "https://niro.cards/"
+        private const val BG_JS =
+            "(function(){try{var c=getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();" +
+                "if(c)return c;return getComputedStyle(document.body).backgroundColor}catch(e){return ''}})()"
         private const val BACK_JS =
             "(function(){try{var s=document.getElementById('scrim');" +
                 "if(s&&!s.hidden){closeSheet();return 1}" +
