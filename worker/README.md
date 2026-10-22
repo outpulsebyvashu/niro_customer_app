@@ -19,6 +19,8 @@ memberships, stamp_events, geo_alerts, device_tokens`. R2 folders: `avatars/<use
 Add database changes as new files in `migrations/` (`0002_...sql`), never by editing `0001`.
 
 ## SMS
+SMS goes through StartMessaging (no DLT paperwork). Add the secret `STARTMESSAGING_API_KEY` (your `sm_live_...` key; in Cloudflare Pages: Settings, Variables and secrets, type Secret) and redeploy. We make and check the code ourselves, StartMessaging only delivers it. Twilio is the fallback if that key is not set.
+
 `DEV_OTP = "1"` (the fixed code 123456, no SMS) now works only when the request comes from localhost. On a live site it is ignored, so delete that variable in Cloudflare. Without an SMS provider, live sign-in fails closed. For production add the SMS secrets, then run
 `npx wrangler secret put TWILIO_SID`, `TWILIO_TOKEN`, `TWILIO_FROM`. To use an Indian provider (MSG91, Textlocal), replace `sendOtp()`.
 India requires DLT registration of the sender ID and message template.

@@ -202,4 +202,23 @@ await call('POST', '/api/auth/request-otp', { body: { phone: '9222222222', name:
 const guesses = await Promise.all(Array.from({ length: 20 }, (_, i) => call('POST', '/api/auth/verify', { body: { phone: '9222222222', code: String(100000 + i) } })));
 assert.ok(guesses.filter((g) => g.status === 400).length <= 5); step('OTP guess limit holds under parallel tries');
 
+// StartMessaging delivery: right URL, key header, E.164 number, and our own 6-digit code in the body
+{
+  const realFetch = globalThis.fetch; let seen;
+  globalThis.fetch = async (u, init) => { seen = { u, init }; return new Response('{"success":true}', { status: 201 }); };
+  const r2 = await worker.fetch(new Request('https://niro.example/api/auth/request-otp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ phone: '9333333333', name: 'S' }) }), { ...env, STARTMESSAGING_API_KEY: 'sm_live_test' });
+  assert.equal(r2.status, 200);
+  const sent = JSON.parse(seen.init.body);
+  assert.equal(seen.u, 'https://api.startmessaging.com/otp/send'); assert.equal(seen.init.headers['x-api-key'], 'sm_live_test');
+  assert.equal(sent.phoneNumber, '+919333333333'); assert.match(sent.variables.otp, /^\d{6}$/);
+  assert.equal((await r2.json()).dev, undefined);
+  // that code verifies; a failing provider gives a clean 502
+  const v = await raw('/api/auth/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ phone: '9333333333', code: sent.variables.otp }) });
+  assert.equal(v.status, 200);
+  globalThis.fetch = async () => new Response('nope', { status: 500 });
+  const r3 = await worker.fetch(new Request('https://niro.example/api/auth/request-otp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ phone: '9444444444', name: 'S' }) }), { ...env, STARTMESSAGING_API_KEY: 'sm_live_test' });
+  assert.equal(r3.status, 502);
+  globalThis.fetch = realFetch; step('StartMessaging sends the code; it verifies; provider errors handled');
+}
+
 console.log('\nALL PASSED');

@@ -16,6 +16,7 @@ export interface Env {
   ASSETS?: Fetcher;       // not used when the app is hosted separately
   SEED_SAMPLE?: string;    // "0" = do not add the five sample cafes when the tables are first created
   DEV_OTP?: string;        // "1" = skip SMS, every code is 123456 (testing only)
+  STARTMESSAGING_API_KEY?: string; // secret: the StartMessaging API key (sm_live_...). Preferred provider when set.
   TWILIO_SID?: string;     // secrets: wrangler secret put TWILIO_SID, etc.
   TWILIO_TOKEN?: string;
   TWILIO_FROM?: string;
@@ -160,6 +161,20 @@ const devOtp = (env: Env, url: URL) => env.DEV_OTP === '1' && isLocal(url);
 
 async function sendOtp(env: Env, phone: string, code: string, url: URL): Promise<void> {
   if (devOtp(env, url)) return;
+  if (env.STARTMESSAGING_API_KEY) {
+    // StartMessaging: no DLT paperwork needed. We make and check the code ourselves, they only deliver it.
+    const res = await fetch('https://api.startmessaging.com/otp/send', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': env.STARTMESSAGING_API_KEY },
+      body: JSON.stringify({ phoneNumber: phone, variables: { otp: code, appName: 'Niro' } }),
+      signal: AbortSignal.timeout(8000),
+    }).catch(() => null);
+    if (!res || !res.ok) {
+      if (res) console.error('startmessaging', res.status, (await res.text().catch(() => '')).slice(0, 200));
+      throw new HttpError(502, 'Could not send the SMS. Try again.');
+    }
+    return;
+  }
   if (!env.TWILIO_SID || !env.TWILIO_TOKEN || !env.TWILIO_FROM) throw new HttpError(500, 'SMS is not set up yet.');
   // Twilio shown as the example. To use MSG91, Textlocal or another Indian provider, replace this call.
   // India requires DLT registration of the sender ID and message template.
