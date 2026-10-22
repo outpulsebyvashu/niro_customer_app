@@ -18,6 +18,6 @@
   }
   b.addEventListener('click',ask);
   try{ if(navigator.permissions&&navigator.permissions.query) navigator.permissions.query({name:'geolocation'}).then(function(s){ s.onchange=function(){ if(s.state==='granted'&&!done){busy=false;ask()} } }).catch(function(){}) }catch(e){}
-  var t0=Date.now(),D=1600;
+  var t0=Date.now(),D=2500;
   (function tick(){var k=Math.min(1,(Date.now()-t0)/D); nv.textContent=Math.round(100*(1-Math.pow(1-k,2))); if(k<1)setTimeout(tick,40); else ask();})();
 })();

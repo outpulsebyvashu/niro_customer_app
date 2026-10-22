@@ -288,21 +288,15 @@ button{cursor:pointer;border:0;background:none}
 .nmid:focus-within{outline:2px solid var(--focus);outline-offset:3px}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 
-#gate{position:fixed;inset:0;z-index:9999;background:#fff;color:#5e17eb;font-family:Poppins,system-ui,sans-serif;transition:opacity .4s ease,visibility .4s}
+#gate{position:fixed;inset:0;z-index:9999;background:#fff;color:#000;font-family:Poppins,system-ui,sans-serif;transition:opacity .4s ease,visibility .4s}
 #gate.out{opacity:0;visibility:hidden;pointer-events:none}
-#gate .gmark{position:absolute;top:max(22px,env(safe-area-inset-top));left:22px;width:52px;height:52px;animation:gpulse 1.6s ease-in-out infinite;transform-origin:30% 30%}
-#gate .gmark path{fill:#5e17eb}
-#gate .gcount{position:absolute;right:24px;bottom:max(22px,env(safe-area-inset-bottom));margin:0;font-weight:700;font-size:72px;line-height:1;letter-spacing:-2px;font-variant-numeric:tabular-nums;display:flex;align-items:flex-start}
-#gate .gcount small{font-size:22px;font-weight:600;letter-spacing:0;margin:6px 0 0 4px}
 #gate .gcard{display:none;position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);flex-direction:column;align-items:center;gap:12px;max-width:320px;margin:0 auto;padding:0 24px;text-align:center}
-#gate.ask .gcard{display:flex} #gate.ask .gcount{opacity:.25}
-#gate h2{margin:0;font-size:22px;font-weight:700;color:#1a1033} #gate p.gp{margin:0;font-size:15px;line-height:1.5;color:#4b4560}
-#gate .gico{width:64px;height:64px;border-radius:50%;background:#f1e9ff;color:#5e17eb;display:grid;place-items:center}
-#gate button{margin-top:6px;min-height:48px;padding:0 28px;border:0;border-radius:14px;background:#5e17eb;color:#fff;font:600 16px Poppins,system-ui,sans-serif;cursor:pointer}
-#gate button:focus-visible{outline:3px solid #ffaaf9;outline-offset:3px}
-#gate .ghelp{font-size:13px;color:#6b6580;display:none;margin:0;line-height:1.5} #gate.denied .ghelp{display:block}
-@keyframes gpulse{0%,100%{transform:scale(1)}50%{transform:scale(1.1) rotate(8deg)}}
-@media (prefers-reduced-motion:reduce){#gate .gmark{animation:none}}
+#gate.ask .gcard{display:flex} #gate.ask .gwords{opacity:0}
+#gate h2{margin:0;font-size:22px;font-weight:700;color:#000} #gate p.gp{margin:0;font-size:15px;line-height:1.5;color:#555}
+#gate .gico{width:64px;height:64px;border-radius:50%;background:#f0f0f0;color:#000;display:grid;place-items:center}
+#gate button{margin-top:6px;min-height:48px;padding:0 28px;border:0;border-radius:14px;background:#000;color:#fff;font:600 16px Poppins,system-ui,sans-serif;cursor:pointer}
+#gate button:focus-visible{outline:3px solid #888;outline-offset:3px}
+#gate .ghelp{font-size:13px;color:#555;display:none;margin:0;line-height:1.5} #gate.denied .ghelp{display:block}
 
 .attr{position:absolute;z-index:4;left:8px;bottom:calc(104px + env(safe-area-inset-bottom,0px));font-size:10px;color:var(--ink2);background:color-mix(in srgb,var(--bg) 78%,transparent);padding:2px 6px;border-radius:6px;text-decoration:none}
 #ava:active{transform:scale(.9)}#ava{transition:transform .2s cubic-bezier(.2,.8,.2,1)}
@@ -311,3 +305,10 @@ button{cursor:pointer;border:0;background:none}
 #home>.hero:last-child,#wallet>.hero:last-child{margin-bottom:20px}
 .hero p{color:var(--hero-ink);opacity:.8}
 .hero .btn{align-self:flex-start;margin-top:4px}
+
+#gate .gwords{position:absolute;left:24px;bottom:max(28px,env(safe-area-inset-bottom));height:1.2em;font:700 clamp(64px,22vw,110px)/1 'Bricolage Grotesque',system-ui,sans-serif;letter-spacing:-.04em;color:#000;overflow:hidden;transition:opacity .3s;min-width:70vw}
+#gate .gw{position:absolute;left:0;bottom:0;transform:translateY(105%);opacity:0;animation:gwio .62s cubic-bezier(.65,0,.35,1) calc(var(--i)*.55s + .15s) both}
+#gate .gw.last{animation-name:gwin;animation-duration:.7s}
+@keyframes gwio{0%{transform:translateY(105%);opacity:0}30%,70%{transform:translateY(0);opacity:1}100%{transform:translateY(-105%);opacity:0}}
+@keyframes gwin{0%{transform:translateY(105%);opacity:0}100%{transform:translateY(0);opacity:1}}
+@media (prefers-reduced-motion:reduce){#gate .gw{animation:none;opacity:0}#gate .gw.last{opacity:1;transform:none}}
