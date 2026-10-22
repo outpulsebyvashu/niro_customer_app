@@ -1,7 +1,7 @@
 /* Launch gate: loading animation, then ask for location. Allowed opens the app; denied blocks and asks again. */
 (function(){
   var g=document.getElementById('gate'); if(!g||g.dataset.on)return; g.dataset.on='1';
-  var t=document.getElementById('gt'),p=document.getElementById('gp'),b=document.getElementById('gb'),busy=false,done=false;
+  var t=document.getElementById('gt'),p=document.getElementById('gp'),nv=document.getElementById('gnv'),b=document.getElementById('gb'),busy=false,done=false;
   document.documentElement.style.overflow='hidden';
   function open(pos){ if(done)return; done=true; window.NIRO_POS=pos&&pos.coords?{lat:pos.coords.latitude,lng:pos.coords.longitude}:null; g.classList.add('out'); document.documentElement.style.overflow=''; setTimeout(function(){g.remove()},600); }
   function block(kind){
@@ -18,5 +18,6 @@
   }
   b.addEventListener('click',ask);
   try{ if(navigator.permissions&&navigator.permissions.query) navigator.permissions.query({name:'geolocation'}).then(function(s){ s.onchange=function(){ if(s.state==='granted'&&!done){busy=false;ask()} } }).catch(function(){}) }catch(e){}
-  setTimeout(ask,1600);
+  var t0=Date.now(),D=1600;
+  (function tick(){var k=Math.min(1,(Date.now()-t0)/D); nv.textContent=Math.round(100*(1-Math.pow(1-k,2))); if(k<1)setTimeout(tick,40); else ask();})();
 })();

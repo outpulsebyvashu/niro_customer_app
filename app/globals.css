@@ -288,23 +288,18 @@ button{cursor:pointer;border:0;background:none}
 .nmid:focus-within{outline:2px solid var(--focus);outline-offset:3px}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 
-#gate{position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:32px;text-align:center;background:linear-gradient(160deg,#5e17eb,#7b3cf5 55%,#9a5cff);color:#fff;font-family:Poppins,system-ui,sans-serif;transition:opacity .45s ease,visibility .45s}
+#gate{position:fixed;inset:0;z-index:9999;background:#fff;color:#5e17eb;font-family:Poppins,system-ui,sans-serif;transition:opacity .4s ease,visibility .4s}
 #gate.out{opacity:0;visibility:hidden;pointer-events:none}
-#gate .gmark{width:92px;height:92px;animation:gpulse 1.6s ease-in-out infinite}
-#gate .gmark path{fill:#fff;transform-origin:500px 500px}
-#gate .gmark path:nth-child(1){animation:gspin 1.6s ease-in-out infinite}
-#gate .gmark path:nth-child(2){animation:gspin 1.6s ease-in-out .18s infinite}
-#gate .gword{font-weight:700;font-size:34px;letter-spacing:-.5px;margin:0}
-#gate .gbar{width:120px;height:4px;border-radius:4px;background:rgba(255,255,255,.25);overflow:hidden}
-#gate .gbar i{display:block;height:100%;width:40%;border-radius:4px;background:#fff;animation:gslide 1.1s ease-in-out infinite}
-#gate .gcard{display:none;flex-direction:column;align-items:center;gap:12px;max-width:320px}
-#gate .gload{display:flex;flex-direction:column;align-items:center;gap:18px}#gate.ask .gload{display:none} #gate.ask .gcard{display:flex}
-#gate h2{margin:0;font-size:22px;font-weight:700} #gate p{margin:0;font-size:15px;line-height:1.5;opacity:.92}
-#gate .gico{width:64px;height:64px;border-radius:50%;background:rgba(255,255,255,.16);display:grid;place-items:center}
-#gate button{margin-top:6px;min-height:48px;padding:0 28px;border:0;border-radius:14px;background:#fff;color:#5e17eb;font:600 16px Poppins,system-ui,sans-serif;cursor:pointer}
+#gate .gmark{position:absolute;top:max(22px,env(safe-area-inset-top));left:22px;width:52px;height:52px;animation:gpulse 1.6s ease-in-out infinite;transform-origin:30% 30%}
+#gate .gmark path{fill:#5e17eb}
+#gate .gcount{position:absolute;right:24px;bottom:max(22px,env(safe-area-inset-bottom));margin:0;font-weight:700;font-size:72px;line-height:1;letter-spacing:-2px;font-variant-numeric:tabular-nums;display:flex;align-items:flex-start}
+#gate .gcount small{font-size:22px;font-weight:600;letter-spacing:0;margin:6px 0 0 4px}
+#gate .gcard{display:none;position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);flex-direction:column;align-items:center;gap:12px;max-width:320px;margin:0 auto;padding:0 24px;text-align:center}
+#gate.ask .gcard{display:flex} #gate.ask .gcount{opacity:.25}
+#gate h2{margin:0;font-size:22px;font-weight:700;color:#1a1033} #gate p.gp{margin:0;font-size:15px;line-height:1.5;color:#4b4560}
+#gate .gico{width:64px;height:64px;border-radius:50%;background:#f1e9ff;color:#5e17eb;display:grid;place-items:center}
+#gate button{margin-top:6px;min-height:48px;padding:0 28px;border:0;border-radius:14px;background:#5e17eb;color:#fff;font:600 16px Poppins,system-ui,sans-serif;cursor:pointer}
 #gate button:focus-visible{outline:3px solid #ffaaf9;outline-offset:3px}
-#gate .ghelp{font-size:13px;opacity:.85;display:none} #gate.denied .ghelp{display:block}
-@keyframes gpulse{0%,100%{transform:scale(1)}50%{transform:scale(1.08)}}
-@keyframes gspin{0%,100%{transform:rotate(0)}50%{transform:rotate(12deg)}}
-@keyframes gslide{0%{transform:translateX(-110%)}100%{transform:translateX(280%)}}
-@media (prefers-reduced-motion:reduce){#gate .gmark,#gate .gmark path,#gate .gbar i{animation:none}}
+#gate .ghelp{font-size:13px;color:#6b6580;display:none;margin:0;line-height:1.5} #gate.denied .ghelp{display:block}
+@keyframes gpulse{0%,100%{transform:scale(1)}50%{transform:scale(1.1) rotate(8deg)}}
+@media (prefers-reduced-motion:reduce){#gate .gmark{animation:none}}
