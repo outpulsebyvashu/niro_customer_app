@@ -1,0 +1,50 @@
+name: Build Android app
+
+on:
+  push:
+    branches: [main, flutter-app]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Create the Android project files
+        run: |
+          cp -r lib /tmp/niro_lib
+          flutter create --project-name niro --org cards.niro --platforms=android .
+          rm -rf lib test
+          cp -r /tmp/niro_lib lib
+          dart run tool/configure_android.dart
+
+      - run: flutter pub get
+
+      - name: Build the APK
+        run: flutter build apk --release --dart-define=API_BASE=https://niro.cards
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: niro-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Publish a release you can download on your phone
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Niro (latest build)
+          files: build/app/outputs/flutter-apk/app-release.apk
