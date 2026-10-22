@@ -1,0 +1,345 @@
+package cards.niro.customer
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Color
+import android.net.ConnectivityManager
+import android.net.Uri
+import android.os.Bundle
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.webkit.CookieManager
+import android.webkit.GeolocationPermissions
+import android.webkit.JavascriptInterface
+import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.Button
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+
+/**
+ * Niro customer app. A thin native shell around the live web app at https://niro.cards,
+ * so the screens look and behave exactly like the website and update without a new APK.
+ */
+class MainActivity : ComponentActivity() {
+
+    private lateinit var root: FrameLayout
+    private lateinit var web: WebView
+    private lateinit var offline: LinearLayout
+
+    private var geoCallback: GeolocationPermissions.Callback? = null
+    private var geoOrigin: String? = null
+    private var fileCallback: ValueCallback<Array<Uri>>? = null
+    private var pendingSave: String? = null
+    private var failed = false
+
+    private val locationPermission = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        geoCallback?.invoke(geoOrigin, grants.values.any { it }, false)
+        geoCallback = null
+        geoOrigin = null
+    }
+
+    private val filePicker = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        fileCallback?.onReceiveValue(
+            WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+        )
+        fileCallback = null
+    }
+
+    private val saveFile = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        val text = pendingSave
+        pendingSave = null
+        if (uri != null && text != null) {
+            try {
+                contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                Toast.makeText(this, "Saved", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(this, "Could not save the file", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, true)
+
+        root = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
+        web = WebView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            setBackgroundColor(Color.WHITE)
+            overScrollMode = View.OVER_SCROLL_NEVER
+        }
+        root.addView(web)
+        offline = buildOfflineView()
+        root.addView(offline)
+        setContentView(root)
+
+        configureWebView()
+
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (offline.visibility == View.VISIBLE) {
+                    finish()
+                    return
+                }
+                // Let the web app close a sheet, or go back to Home, before leaving the app.
+                web.evaluateJavascript(BACK_JS) { r ->
+                    if (r == "1") return@evaluateJavascript
+                    if (web.canGoBack()) web.goBack() else finish()
+                }
+            }
+        })
+
+        if (savedInstanceState != null) web.restoreState(savedInstanceState) else load()
+    }
+
+    private fun load() {
+        failed = false
+        offline.visibility = View.GONE
+        if (!isOnline()) {
+            showOffline()
+            return
+        }
+        val target = intent?.data?.takeIf { it.host == HOST } ?: Uri.parse(HOME)
+        web.loadUrl(target.toString())
+    }
+
+    private fun isOnline(): Boolean {
+        val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+        return cm.activeNetworkInfo?.isConnected == true
+    }
+
+    private fun showOffline() {
+        offline.visibility = View.VISIBLE
+        offline.bringToFront()
+    }
+
+    private fun buildOfflineView(): LinearLayout {
+        val pad = (24 * resources.displayMetrics.density).toInt()
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(pad, pad, pad, pad)
+            setBackgroundColor(Color.WHITE)
+            visibility = View.GONE
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            addView(TextView(context).apply {
+                text = getString(R.string.offline_title)
+                textSize = 26f
+                setTextColor(Color.parseColor("#0B0B0B"))
+                gravity = Gravity.CENTER
+            })
+            addView(TextView(context).apply {
+                text = getString(R.string.offline_text)
+                textSize = 16f
+                setTextColor(Color.parseColor("#62625F"))
+                gravity = Gravity.CENTER
+                setPadding(0, pad / 2, 0, pad)
+            })
+            addView(Button(context).apply {
+                text = getString(R.string.retry)
+                isAllCaps = false
+                setTextColor(Color.WHITE)
+                setBackgroundColor(Color.parseColor("#0B0B0B"))
+                setOnClickListener { load() }
+            })
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun configureWebView() {
+        CookieManager.getInstance().apply {
+            setAcceptCookie(true)
+            setAcceptThirdPartyCookies(web, false)
+        }
+        web.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            setGeolocationEnabled(true)
+            mediaPlaybackRequiresUserGesture = false
+            allowFileAccess = false
+            allowContentAccess = false
+            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            cacheMode = WebSettings.LOAD_DEFAULT
+            userAgentString = userAgentString + " NiroApp/1.0"
+            setSupportZoom(false)
+            builtInZoomControls = false
+        }
+        web.addJavascriptInterface(Bridge(), "NiroApp")
+
+        web.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                val uri = request.url
+                val scheme = uri.scheme ?: ""
+                if (scheme == "about" || scheme == "blob" || scheme == "data") return false
+                if (scheme == "https" && (uri.host == HOST || uri.host == "www.$HOST")) return false
+                // Anything else (partner, staff and admin apps, Google Wallet, WhatsApp, links, phone, mail)
+                // opens in the right app, not inside this one.
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE))
+                } catch (e: ActivityNotFoundException) {
+                    Toast.makeText(this@MainActivity, "No app can open this link", Toast.LENGTH_SHORT).show()
+                }
+                return true
+            }
+
+            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                if (request.isForMainFrame) {
+                    failed = true
+                    showOffline()
+                }
+            }
+
+            override fun onPageFinished(view: WebView, url: String) {
+                if (!failed) offline.visibility = View.GONE
+                CookieManager.getInstance().flush()
+            }
+
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                recreate()
+                return true
+            }
+        }
+
+        web.webChromeClient = object : WebChromeClient() {
+            override fun onGeolocationPermissionsShowPrompt(
+                origin: String, callback: GeolocationPermissions.Callback
+            ) {
+                val fine = ContextCompat.checkSelfPermission(
+                    this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+                val coarse = ContextCompat.checkSelfPermission(
+                    this@MainActivity, Manifest.permission.ACCESS_COARSE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+                if (fine || coarse) {
+                    callback.invoke(origin, true, false)
+                } else {
+                    geoCallback = callback
+                    geoOrigin = origin
+                    locationPermission.launch(
+                        arrayOf(
+                            Manifest.permission.ACCESS_FINE_LOCATION,
+                            Manifest.permission.ACCESS_COARSE_LOCATION
+                        )
+                    )
+                }
+            }
+
+            override fun onPermissionRequest(request: PermissionRequest) {
+                request.deny()
+            }
+
+            override fun onShowFileChooser(
+                view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams
+            ): Boolean {
+                fileCallback?.onReceiveValue(null)
+                fileCallback = callback
+                return try {
+                    filePicker.launch(params.createIntent())
+                    true
+                } catch (e: Exception) {
+                    fileCallback = null
+                    false
+                }
+            }
+        }
+    }
+
+    /** Small bridge so the web app can use native sharing, saving and bar colours. */
+    private inner class Bridge {
+        @JavascriptInterface
+        fun share(text: String, url: String) {
+            runOnUiThread {
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, "$text $url")
+                }
+                startActivity(Intent.createChooser(send, null))
+            }
+        }
+
+        @JavascriptInterface
+        fun save(name: String, text: String) {
+            runOnUiThread {
+                pendingSave = text
+                try {
+                    saveFile.launch(name)
+                } catch (e: Exception) {
+                    pendingSave = null
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun theme(dark: Boolean) {
+            runOnUiThread {
+                val bg = if (dark) Color.parseColor("#0B0B0B") else Color.parseColor("#F7F7F5")
+                window.statusBarColor = bg
+                window.navigationBarColor = bg
+                root.setBackgroundColor(bg)
+                val controller = WindowCompat.getInsetsController(window, window.decorView)
+                controller.isAppearanceLightStatusBars = !dark
+                controller.isAppearanceLightNavigationBars = !dark
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        web.onResume()
+    }
+
+    override fun onPause() {
+        CookieManager.getInstance().flush()
+        web.onPause()
+        super.onPause()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        web.saveState(outState)
+    }
+
+    override fun onDestroy() {
+        web.destroy()
+        super.onDestroy()
+    }
+
+    companion object {
+        private const val HOST = "niro.cards"
+        private const val HOME = "https://niro.cards/"
+        private const val BACK_JS =
+            "(function(){try{var s=document.getElementById('scrim');" +
+                "if(s&&!s.hidden){closeSheet();return 1}" +
+                "if(state.tab&&state.tab!=='home'){setTab('home');return 1}}catch(e){}return 0})()"
+    }
+}
