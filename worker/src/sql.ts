@@ -26,7 +26,9 @@ export const SCHEMA_STATEMENTS: string[] = [
   "create index geo_alerts_user on geo_alerts (user_id, sent_at)",
   "create table device_tokens (\n  token       text primary key,\n  user_id     text not null references users(id) on delete cascade,\n  platform    text not null check (platform in ('android','ios','web')),\n  updated_at  text not null\n)",
   "create index device_tokens_user on device_tokens (user_id)",
-  "create table support_messages (\n  id          text primary key,\n  user_id     text,\n  contact     text,\n  message     text not null,\n  ip_hash     text not null,\n  status      text not null default 'open',\n  created_at  text not null\n)"
+  "create table support_messages (\n  id          text primary key,\n  user_id     text,\n  contact     text,\n  message     text not null,\n  ip_hash     text not null,\n  status      text not null default 'open',\n  created_at  text not null\n)",
+  "create table live_events (\n  id         integer primary key autoincrement,\n  user_id    text not null,\n  kind       text not null,\n  cafe_name  text,\n  qty        integer,\n  created_at text not null\n)",
+  "create index live_events_user on live_events (user_id, id)"
 ];
 
 export const SEED_STATEMENTS: string[] = [

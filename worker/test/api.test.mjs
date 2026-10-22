@@ -315,7 +315,15 @@ assert.ok(guesses.filter((g) => g.status === 400).length <= 5); step('OTP guess 
   const cd = ok(await call('GET', '/api/staff/card?code=' + code, { token: pm })); assert.equal(cd.name, 'Chitra'); assert.equal(cd.stamps, 0);
   assert.equal((await call('GET', '/api/staff/card?code=' + code, { token: cust })).status, 404);
   ok(await call('POST', '/api/staff/stamp', { token: pm, body: { code, qty: 2 } }));
-  const td = ok(await call('GET', '/api/staff/today?cafe_id=' + made.id, { token: pm })); assert.equal(td.stamps, 2); assert.equal(td.events[0].customer, 'Chitra');
+  {
+    const resp = await worker.fetch(new Request('http://localhost/api/live', { headers: { authorization: 'Bearer ' + cust } }), env); assert.equal(resp.status, 200); assert.match(resp.headers.get('content-type'), /event-stream/);
+    const rd = resp.body.getReader(); let seen = '';
+    ok(await call('GET', '/api/staff/card?code=' + code, { token: pm }));
+    ok(await call('POST', '/api/staff/stamp', { token: pm, body: { code, qty: 1 } }));
+    const t0 = Date.now(); while (!(seen.includes('"kind":"scan"') && seen.includes('"kind":"stamp"')) && Date.now() - t0 < 5000) { const { value } = await rd.read(); seen += new TextDecoder().decode(value); }
+    await rd.cancel(); assert.ok(seen.includes('"cafe_name"') && seen.includes('"kind":"scan"') && seen.includes('"kind":"stamp"')); step('live: scan and stamp reach the customer within a second');
+  }
+  const td = ok(await call('GET', '/api/staff/today?cafe_id=' + made.id, { token: pm })); assert.equal(td.stamps, 3); assert.equal(td.events[0].customer, 'Chitra');
   assert.equal((await call('GET', '/api/staff/today?cafe_id=' + made.id, { token: cust })).status, 403); step('workforce: card lookup, stamp and today list');
   ok(await call('POST', '/api/cafes/' + made.id + '/staff', { token: pm, body: { phone: '9888888888', role: 'staff' } }), 201);
   const pc2 = ok(await call('GET', '/api/partner/cafes', { token: pm })).cafes[0]; const sid = pc2.staff.find((x) => x.role === 'staff').id;

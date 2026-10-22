@@ -49,6 +49,9 @@ const PATTERNS = ['dots', 'stripes', 'rings', 'grid'];
 const SUPPORT_TABLE = `create table if not exists support_messages (
   id text primary key, user_id text, contact text, message text not null, ip_hash text not null,
   status text not null default 'open', created_at text not null)`;
+const LIVE_TABLE = `create table if not exists live_events (
+  id integer primary key autoincrement, user_id text not null, kind text not null, cafe_name text, qty integer, created_at text not null)`;
+const LIVE_INDEX = `create index if not exists live_events_user on live_events (user_id, id)`;
 let dbReady: Promise<void> | null = null;
 async function tablesExist(env: Env): Promise<boolean> {
   const t = await env.DB.prepare(`select name from sqlite_master where type = 'table' and name = 'users'`).first();
@@ -67,6 +70,8 @@ function ensureDb(env: Env): Promise<void> {
       }
       // Tables added after the first release: created here for databases that already exist.
       await env.DB.prepare(SUPPORT_TABLE).run();
+      await env.DB.prepare(LIVE_TABLE).run();
+      await env.DB.prepare(LIVE_INDEX).run();
       // The five sample cafes from the first demo are not real. Remove them unless sample data was asked for.
       if (env.SEED_SAMPLE !== '1') await env.DB.prepare(`delete from cafes where id in ('agr','kaa','cru','cha','waf') and owner_id is null`).run();
     })().catch((e) => { dbReady = null; throw e; });
@@ -445,6 +450,7 @@ route('DELETE', '/api/me', async ({ req, env }) => {
   const u = await requireUser(req, env);
   if (u.photo_key && env.MEDIA) await env.MEDIA.delete(u.photo_key);
   await env.DB.prepare(`delete from support_messages where user_id = ?`).bind(u.id).run();
+  await env.DB.prepare(`delete from live_events where user_id = ?`).bind(u.id).run();
   await env.DB.prepare(`delete from users where id = ?`).bind(u.id).run(); // cascades to cards, sessions, dates
   return json({ ok: true }, 200, { 'set-cookie': 'cl_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0' });
 });
@@ -699,6 +705,7 @@ route('POST', '/api/devices', async ({ req, env }) => {
 });
 
 // --- staff app: scan, stamp, redeem, clock in and out ---
+const cafeName = async (env: Env, id: string) => (await env.DB.prepare(`select name from cafes where id = ?`).bind(id).first<{ name: string }>())?.name ?? '';
 async function cardByCode(env: Env, raw: unknown) {
   const code = String(raw ?? '').trim().toUpperCase();
   const m = await env.DB.prepare(`select m.id, m.cafe_id, m.user_id, m.stamps, c.stamp_goal from memberships m join cafes c on c.id = m.cafe_id where m.member_code = ?`)
@@ -706,6 +713,33 @@ async function cardByCode(env: Env, raw: unknown) {
   if (!m) throw new HttpError(404, 'Card not found.');
   return m;
 }
+
+// --- live connection: the customer's phone hears about scans and stamps within a second (server-sent events) ---
+async function pushLive(env: Env, userId: string, kind: 'scan' | 'stamp' | 'redeem', cafeName: string, qty = 0) {
+  await env.DB.prepare(`insert into live_events (user_id, kind, cafe_name, qty, created_at) values (?, ?, ?, ?, ?)`).bind(userId, kind, cafeName, qty, now()).run();
+  await env.DB.prepare(`delete from live_events where created_at < ?`).bind(new Date(Date.now() - 86400_000).toISOString()).run();
+}
+route('GET', '/api/live', async ({ req, env }) => {
+  const u = await requireUser(req, env);
+  let last = (await env.DB.prepare(`select coalesce(max(id), 0) as n from live_events where user_id = ?`).bind(u.id).first<{ n: number }>())?.n ?? 0;
+  const enc = new TextEncoder(); let closed = false;
+  const stream = new ReadableStream({
+    async start(ctrl) {
+      const send = (t: string) => { if (!closed) try { ctrl.enqueue(enc.encode(t)); } catch { closed = true; } };
+      send('retry: 1500\n\n: connected\n\n');
+      const end = Date.now() + 28_000;
+      while (!closed && Date.now() < end) {
+        const r = await env.DB.prepare(`select id, kind, cafe_name, qty from live_events where user_id = ? and id > ? order by id`).bind(u.id, last).all<{ id: number; kind: string; cafe_name: string; qty: number }>();
+        for (const e of r.results) { last = e.id; send(`event: live\ndata: ${JSON.stringify(e)}\n\n`); }
+        if (!r.results.length) send(': ping\n\n');
+        await new Promise((res) => setTimeout(res, 1000));
+      }
+      if (!closed) try { ctrl.close(); } catch { /* already closed */ }
+    },
+    cancel() { closed = true; },
+  });
+  return new Response(stream, { headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-store', 'x-accel-buffering': 'no' } });
+});
 
 route('POST', '/api/staff/stamp', async ({ req, env }) => {
   const u = await requireUser(req, env);
@@ -720,6 +754,7 @@ route('POST', '/api/staff/stamp', async ({ req, env }) => {
     env.DB.prepare(`insert into stamp_events (membership_id, cafe_id, staff_user_id, kind, qty, created_at) values (?, ?, ?, 'stamp', ?, ?)`).bind(m.id, m.cafe_id, u.id, qty, now()),
   ]);
   const fresh = await env.DB.prepare(`select stamps, rewards_redeemed from memberships where id = ?`).bind(m.id).first<{ stamps: number; rewards_redeemed: number }>();
+  await pushLive(env, m.user_id, 'stamp', await cafeName(env, m.cafe_id), qty);
   return json({ ...fresh, stamp_goal: m.stamp_goal, reward_ready: (fresh?.stamps ?? 0) >= m.stamp_goal });
 });
 
@@ -732,6 +767,7 @@ route('POST', '/api/staff/redeem', async ({ req, env }) => {
   if (!r.meta.changes) throw new HttpError(409, 'The card is not full yet.');
   await env.DB.prepare(`insert into stamp_events (membership_id, cafe_id, staff_user_id, kind, qty, created_at) values (?, ?, ?, 'redeem', 1, ?)`).bind(m.id, m.cafe_id, u.id, now()).run();
   const fresh = await env.DB.prepare(`select stamps, rewards_redeemed from memberships where id = ?`).bind(m.id).first();
+  await pushLive(env, m.user_id, 'redeem', await cafeName(env, m.cafe_id));
   return json({ ...fresh, stamp_goal: m.stamp_goal });
 });
 
@@ -989,6 +1025,7 @@ route('GET', '/api/staff/card', async ({ req, env, url }) => {
   const r = await env.DB.prepare(
     `select u.name, m.stamps, m.rewards_redeemed, c.name as cafe, c.stamp_goal, c.reward_text from memberships m join users u on u.id = m.user_id join cafes c on c.id = m.cafe_id where m.id = ?`)
     .bind(m.id).first<{ name: string; stamps: number; rewards_redeemed: number; cafe: string; stamp_goal: number; reward_text: string }>();
+  await pushLive(env, m.user_id, 'scan', r!.cafe);
   return json({ ...r!, name: r!.name.split(/\s+/)[0] });
 });
 

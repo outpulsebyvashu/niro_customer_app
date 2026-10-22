@@ -119,7 +119,19 @@ function poll(){
     if(Date.now()-lastNear>60000&&you.lat!=null&&state.nearLoaded&&!state.nearErr){lastNear=Date.now();loadNearby()}
   }).catch(function(e){if(e.status===401){signOut()}}).then(function(){pollBusy=false;schedulePoll()});
 }
-document.addEventListener('visibilitychange',function(){if(!document.hidden&&state.auth){clearTimeout(pollT);poll()}});
+/* live connection: the server tells this phone the moment a card is scanned or stamped */
+var es=null;
+function liveOn(){
+  if(es||!state.auth||document.hidden||!window.EventSource)return;
+  es=new EventSource('/api/live');
+  es.addEventListener('live',function(ev){
+    var d={};try{d=JSON.parse(ev.data)}catch(x){}
+    if(d.kind==='scan'){toast('Scanning your card at '+d.cafe_name+'…');if(navigator.vibrate)try{navigator.vibrate(40)}catch(x){}}
+    clearTimeout(pollT);poll();
+  });
+}
+function liveOff(){if(es){es.close();es=null}}
+document.addEventListener('visibilitychange',function(){if(document.hidden)liveOff();else if(state.auth){liveOn();clearTimeout(pollT);poll()}});
 window.addEventListener('focus',function(){if(state.auth){clearTimeout(pollT);poll()}});
 function loadSaved(){
   return api('GET','/api/saved-offers').then(function(d){state.saved={};d.ids.forEach(function(i){state.saved[i]=true});state.savedList=d.offers});
@@ -129,7 +141,7 @@ function loadAccount(){
     if(e.status!==401){toast(e.message)} state.auth=false; afterAccount();
   });
 }
-function afterAccount(){schedulePoll();updateHeader();renderHome();renderWallet();if(state.tab==='profile')renderProfile();refreshMap()}
+function afterAccount(){schedulePoll();if(state.auth)liveOn();updateHeader();renderHome();renderWallet();if(state.tab==='profile')renderProfile();refreshMap()}
 
 /* ---------- home ---------- */
 function offerFeed(){
@@ -812,6 +824,7 @@ function signIn(user){
   });
 }
 function signOut(){
+  liveOff();
   state.auth=false; state.pend=''; state.route=null; state.sel=null; state.saved={}; state.savedList=[]; state.admin=false; state.geo.used=0;
   Object.keys(registry).forEach(function(k){var c=registry[k];c.joined=false;c.stamps=0;c.mid='';c.mem=''}); walletOrder=[];
   state.me={name:'',phone:'',photo:'',birthday:'',email:'',diet:'',fav:'',dates:[]};

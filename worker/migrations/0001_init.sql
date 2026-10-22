@@ -153,3 +153,13 @@ create table support_messages (
   status      text not null default 'open',
   created_at  text not null
 );
+
+create table live_events (
+  id         integer primary key autoincrement,
+  user_id    text not null,
+  kind       text not null,
+  cafe_name  text,
+  qty        integer,
+  created_at text not null
+);
+create index live_events_user on live_events (user_id, id);
