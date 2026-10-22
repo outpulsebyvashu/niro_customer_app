@@ -33,18 +33,18 @@ jobs:
         run: gradle --no-daemon assembleRelease
 
       - name: Name the APK
-        run: cp android/app/build/outputs/apk/release/app-release.apk Niro.apk
+        run: cp android/app/build/outputs/apk/release/app-release.apk Niro-beta.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Niro-apk
-          path: Niro.apk
+          name: Niro-beta-apk
+          path: Niro-beta.apk
 
       - name: Publish a release with the APK
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "apk-${{ github.run_number }}" Niro.apk \
-            --title "Niro 1.0.${{ github.run_number }}" \
-            --notes "Android app (Kotlin). Opens the live Niro customer app at niro.cards. Install Niro.apk." \
+          gh release create "apk-${{ github.run_number }}" Niro-beta.apk \
+            --title "Niro-beta 1.0.${{ github.run_number }}" \
+            --notes "Android app (Kotlin). Opens the live Niro customer app at niro.cards. Install Niro-beta.apk." \
             --latest
