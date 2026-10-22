@@ -68,7 +68,7 @@ function media(env: Env): R2Bucket {
 }
 
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
-  new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers } });
+  new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', ...headers } });
 
 const now = () => new Date().toISOString();
 const uuid = () => crypto.randomUUID();
@@ -101,7 +101,13 @@ function normalizePhone(raw: unknown): string {
 }
 
 async function body<T = Record<string, unknown>>(req: Request): Promise<T> {
-  try { return (await req.json()) as T; } catch { throw new HttpError(400, 'Send a JSON body.'); }
+  const text = await req.text();
+  if (text.length > 20_000) throw new HttpError(413, 'Request is too large.');
+  try {
+    const v = JSON.parse(text);
+    if (!v || typeof v !== 'object' || Array.isArray(v)) throw 0;
+    return v as T;
+  } catch { throw new HttpError(400, 'Send a JSON body.'); }
 }
 
 function str(v: unknown, max: number, field: string, required = false): string | null {
@@ -115,6 +121,17 @@ function str(v: unknown, max: number, field: string, required = false): string |
   if (t.length > max) throw new HttpError(400, `${field} is too long.`);
   return t;
 }
+
+function endsAt(v: unknown): string | null {
+  const t = str(v, 30, 'ends_at');
+  if (t && Number.isNaN(Date.parse(t))) throw new HttpError(400, 'ends_at must be a date.');
+  return t ? new Date(t).toISOString() : null;
+}
+const hhmm = (v: unknown, f: string) => {
+  const t = str(v, 5, f);
+  if (t && !/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) throw new HttpError(400, `${f} must be HH:MM.`);
+  return t;
+};
 
 function validDate(v: string, field: string): string {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(Date.parse(v))) throw new HttpError(400, `${field} must be YYYY-MM-DD.`);
@@ -136,15 +153,20 @@ function distanceM(lat1: number, lng1: number, lat2: number, lng2: number): numb
 }
 
 // ---------- SMS ----------
-async function sendOtp(env: Env, phone: string, code: string): Promise<void> {
-  if (env.DEV_OTP === '1') return;
+// The fixed test code (123456) is honoured only when the request really comes from localhost.
+// On a live site DEV_OTP is ignored, so a forgotten setting can never let anyone sign in as someone else.
+const isLocal = (url: URL) => url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+const devOtp = (env: Env, url: URL) => env.DEV_OTP === '1' && isLocal(url);
+
+async function sendOtp(env: Env, phone: string, code: string, url: URL): Promise<void> {
+  if (devOtp(env, url)) return;
   if (!env.TWILIO_SID || !env.TWILIO_TOKEN || !env.TWILIO_FROM) throw new HttpError(500, 'SMS is not set up yet.');
   // Twilio shown as the example. To use MSG91, Textlocal or another Indian provider, replace this call.
   // India requires DLT registration of the sender ID and message template.
   const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_SID}/Messages.json`, {
     method: 'POST',
     headers: { authorization: 'Basic ' + btoa(`${env.TWILIO_SID}:${env.TWILIO_TOKEN}`), 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ To: phone, From: env.TWILIO_FROM, Body: `${code} is your Cafe Loyalty code. It expires in ${OTP_MINUTES} minutes.` }),
+    body: new URLSearchParams({ To: phone, From: env.TWILIO_FROM, Body: `${code} is your Niro code. Do not share it. It expires in ${OTP_MINUTES} minutes.` }),
   });
   if (!res.ok) throw new HttpError(502, 'Could not send the SMS. Try again.');
 }
@@ -170,6 +192,14 @@ async function requireUser(req: Request, env: Env): Promise<User> {
 async function staffRow(env: Env, userId: string, cafeId: string) {
   return env.DB.prepare(`select id, role, hourly_rate from staff where cafe_id = ? and user_id = ? and is_active = 1`)
     .bind(cafeId, userId).first<{ id: string; role: string; hourly_rate: number }>();
+}
+// Staff check for a scanned card: a card from another cafe looks exactly like a card that does not exist,
+// and staff cannot stamp or redeem their own card.
+async function requireStaffForCard(env: Env, userId: string, m: { cafe_id: string; user_id: string }) {
+  const s = await staffRow(env, userId, m.cafe_id);
+  if (!s) throw new HttpError(404, 'Card not found.');
+  if (m.user_id === userId) throw new HttpError(403, 'You cannot stamp your own card.');
+  return s;
 }
 async function requireStaff(env: Env, userId: string, cafeId: string) {
   const s = await staffRow(env, userId, cafeId);
@@ -208,6 +238,11 @@ async function readImage(req: Request): Promise<{ bytes: ArrayBuffer; ext: strin
   if (!ext) throw new HttpError(415, 'Send a JPEG, PNG or WebP image.');
   const bytes = await req.arrayBuffer();
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_IMAGE_BYTES) throw new HttpError(413, 'Image must be under 2 MB.');
+  const h = new Uint8Array(bytes.slice(0, 12));
+  const ok = ext === 'jpg' ? h[0] === 0xff && h[1] === 0xd8 && h[2] === 0xff
+    : ext === 'png' ? h[0] === 0x89 && h[1] === 0x50 && h[2] === 0x4e && h[3] === 0x47
+    : h[0] === 0x52 && h[1] === 0x49 && h[2] === 0x46 && h[3] === 0x46 && h[8] === 0x57 && h[9] === 0x45 && h[10] === 0x42 && h[11] === 0x50;
+  if (!ok) throw new HttpError(415, 'That file is not a real image.');
   return { bytes, ext, type };
 }
 
@@ -231,24 +266,31 @@ const route = (method: string, path: string, h: Handler) =>
   routes.push([method, new RegExp('^' + path.replace(/:(\w+)/g, '(?<$1>[^/]+)').replace(/\*(\w+)/, '(?<$1>.+)') + '$'), h]);
 
 // --- sign in ---
-route('POST', '/api/auth/request-otp', async ({ req, env }) => {
+route('POST', '/api/auth/request-otp', async ({ req, env, url }) => {
   const b = await body(req);
   const phone = normalizePhone(b.phone);
   const name = str(b.name, 60, 'Name');
+  // Per-IP limit (stops one device from texting many numbers). Stored in the same table under an "ip:" key.
+  const ipKey = 'ip:' + (req.headers.get('cf-connecting-ip') ?? 'unknown');
+  const ipRecent = await env.DB.prepare(`select count(*) as n from otp_requests where phone = ? and created_at > ?`)
+    .bind(ipKey, new Date(Date.now() - 3600_000).toISOString()).first<{ n: number }>();
+  if ((ipRecent?.n ?? 0) >= 60) throw new HttpError(429, 'Too many requests from this device. Try again later.');
   const recent = await env.DB.prepare(`select created_at from otp_requests where phone = ? and created_at > ? order by created_at desc`)
     .bind(phone, new Date(Date.now() - 3600_000).toISOString()).all<{ created_at: string }>();
   if (recent.results.length >= 5) throw new HttpError(429, 'Too many codes requested. Try again in an hour.');
   if (recent.results[0] && Date.now() - Date.parse(recent.results[0].created_at) < 30_000) throw new HttpError(429, 'Wait 30 seconds before asking for another code.');
 
-  const code = env.DEV_OTP === '1' ? '123456' : otpCode();
+  const code = devOtp(env, url) ? '123456' : otpCode();
   await env.DB.batch([
     env.DB.prepare(`insert into otp_codes (phone, code_hash, name, attempts, expires_at) values (?, ?, ?, 0, ?)
                     on conflict(phone) do update set code_hash = excluded.code_hash, name = excluded.name, attempts = 0, expires_at = excluded.expires_at`)
       .bind(phone, await sha256(phone + ':' + code), name, new Date(Date.now() + OTP_MINUTES * 60_000).toISOString()),
     env.DB.prepare(`insert into otp_requests (phone, created_at) values (?, ?)`).bind(phone, now()),
+    env.DB.prepare(`insert into otp_requests (phone, created_at) values (?, ?)`).bind(ipKey, now()),
+    env.DB.prepare(`delete from otp_requests where created_at < ?`).bind(new Date(Date.now() - 86400_000).toISOString()),
   ]);
-  await sendOtp(env, phone, code);
-  return json({ ok: true, expires_in: OTP_MINUTES * 60, dev: env.DEV_OTP === '1' ? 'Testing mode: the code is 123456' : undefined });
+  await sendOtp(env, phone, code, url);
+  return json({ ok: true, expires_in: OTP_MINUTES * 60, dev: devOtp(env, url) ? 'Testing mode: the code is 123456' : undefined });
 });
 
 route('POST', '/api/auth/verify', async ({ req, env, url }) => {
@@ -259,31 +301,33 @@ route('POST', '/api/auth/verify', async ({ req, env, url }) => {
   const row = await env.DB.prepare(`select code_hash, name, attempts, expires_at from otp_codes where phone = ?`)
     .bind(phone).first<{ code_hash: string; name: string | null; attempts: number; expires_at: string }>();
   if (!row || row.expires_at < now()) throw new HttpError(400, 'That code has expired. Ask for a new one.');
-  if (row.attempts >= 5) throw new HttpError(429, 'Too many wrong tries. Ask for a new code.');
-  if ((await sha256(phone + ':' + code)) !== row.code_hash) {
-    await env.DB.prepare(`update otp_codes set attempts = attempts + 1 where phone = ?`).bind(phone).run();
-    throw new HttpError(400, 'That code is not right.');
-  }
-  await env.DB.prepare(`delete from otp_codes where phone = ?`).bind(phone).run();
+  // Count the try first, in one atomic step, so parallel guesses cannot get past the 5-try limit.
+  const tried = await env.DB.prepare(`update otp_codes set attempts = attempts + 1 where phone = ? and attempts < 5`).bind(phone).run();
+  if (!tried.meta.changes) throw new HttpError(429, 'Too many wrong tries. Ask for a new code.');
+  if ((await sha256(phone + ':' + code)) !== row.code_hash) throw new HttpError(400, 'That code is not right.');
+  // Use the code exactly once, even if two correct requests arrive together.
+  const used = await env.DB.prepare(`delete from otp_codes where phone = ? and code_hash = ?`).bind(phone, row.code_hash).run();
+  if (!used.meta.changes) throw new HttpError(400, 'That code has expired. Ask for a new one.');
 
   await env.DB.prepare(`insert into users (id, phone, name) values (?, ?, ?) on conflict(phone) do nothing`).bind(uuid(), phone, row.name ?? '').run();
   if (row.name) await env.DB.prepare(`update users set name = ? where phone = ? and name = ''`).bind(row.name, phone).run();
   const user = await env.DB.prepare(`select * from users where phone = ?`).bind(phone).first<User>();
   if (!user) throw new HttpError(500, 'Could not create your account.');
 
+  await env.DB.prepare(`delete from sessions where expires_at < ?`).bind(now()).run();
   const token = randomToken();
   await env.DB.prepare(`insert into sessions (token_hash, user_id, expires_at) values (?, ?, ?)`)
     .bind(await sha256(token), user.id, new Date(Date.now() + SESSION_DAYS * 86400_000).toISOString()).run();
   const secure = url.protocol === 'https:' ? '; Secure' : '';
   return json({ token, user: publicUser(user) }, 200, {
-    'set-cookie': `cl_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${secure}`,
+    'set-cookie': `cl_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_DAYS * 86400}${secure}`,
   });
 });
 
 route('POST', '/api/auth/logout', async ({ req, env }) => {
   const t = tokenFrom(req);
   if (t) await env.DB.prepare(`delete from sessions where token_hash = ?`).bind(await sha256(t)).run();
-  return json({ ok: true }, 200, { 'set-cookie': 'cl_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0' });
+  return json({ ok: true }, 200, { 'set-cookie': 'cl_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0' });
 });
 
 // --- my profile ---
@@ -360,13 +404,14 @@ route('DELETE', '/api/me', async ({ req, env }) => {
   const u = await requireUser(req, env);
   if (u.photo_key && env.MEDIA) await env.MEDIA.delete(u.photo_key);
   await env.DB.prepare(`delete from users where id = ?`).bind(u.id).run(); // cascades to cards, sessions, dates
-  return json({ ok: true }, 200, { 'set-cookie': 'cl_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0' });
+  return json({ ok: true }, 200, { 'set-cookie': 'cl_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0' });
 });
 
 // --- files in R2 ---
 route('GET', '/api/media/*key', async ({ req, env, p }) => {
-  const key = decodeURIComponent(p.key);
-  if (key.includes('..')) throw new HttpError(400, 'Bad path.');
+  let key: string;
+  try { key = decodeURIComponent(p.key); } catch { throw new HttpError(400, 'Bad path.'); }
+  if (key.includes('..') || key.includes('\\')) throw new HttpError(400, 'Bad path.');
   let cache = 'public, max-age=86400';
   if (key.startsWith('avatars/')) {
     const u = await requireUser(req, env);
@@ -375,7 +420,8 @@ route('GET', '/api/media/*key', async ({ req, env, p }) => {
   } else if (!key.startsWith('cafe-media/')) throw new HttpError(404, 'Not found.');
   const obj = await media(env).get(key);
   if (!obj) throw new HttpError(404, 'Not found.');
-  return new Response(obj.body, { headers: { 'content-type': obj.httpMetadata?.contentType ?? 'application/octet-stream', 'cache-control': cache, etag: obj.httpEtag } });
+  return new Response(obj.body, { headers: { 'content-type': IMAGE_TYPES[obj.httpMetadata?.contentType ?? ''] ? obj.httpMetadata!.contentType! : 'application/octet-stream', 'cache-control': cache, etag: obj.httpEtag,
+    'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; sandbox", 'cross-origin-resource-policy': 'same-origin' } });
 });
 
 // --- cafes (anyone can browse) ---
@@ -462,10 +508,16 @@ route('POST', '/api/geo-alerts', async ({ req, env }) => {
   const b = await body(req);
   const cafeId = str(b.cafe_id, 64, 'cafe_id', true)!;
   if (JSON.parse(u.prefs).geo === false) return json({ allowed: false, reason: 'off' });
-  const used = await env.DB.prepare(`select count(*) as n from geo_alerts where user_id = ? and sent_at >= ?`).bind(u.id, istDayStart()).first<{ n: number }>();
-  if ((used?.n ?? 0) >= GEO_DAILY_CAP) return json({ allowed: false, reason: 'daily_limit', used: used?.n });
-  await env.DB.prepare(`insert into geo_alerts (user_id, cafe_id, sent_at) values (?, ?, ?)`).bind(u.id, cafeId, now()).run();
-  return json({ allowed: true, used: (used?.n ?? 0) + 1, cap: GEO_DAILY_CAP });
+  const cafe = await env.DB.prepare(`select id from cafes where id = ? and is_active = 1`).bind(cafeId).first();
+  if (!cafe) throw new HttpError(404, 'Cafe not found.');
+  // Check the daily limit and record the alert in one statement, so two quick requests cannot both pass.
+  const start = istDayStart();
+  const ins = await env.DB.prepare(`insert into geo_alerts (user_id, cafe_id, sent_at)
+      select ?1, ?2, ?3 where (select count(*) from geo_alerts where user_id = ?1 and sent_at >= ?4) < ?5`)
+    .bind(u.id, cafeId, now(), start, GEO_DAILY_CAP).run();
+  const used = await env.DB.prepare(`select count(*) as n from geo_alerts where user_id = ? and sent_at >= ?`).bind(u.id, start).first<{ n: number }>();
+  if (!ins.meta.changes) return json({ allowed: false, reason: 'daily_limit', used: used?.n });
+  return json({ allowed: true, used: used?.n ?? 1, cap: GEO_DAILY_CAP });
 });
 
 route('POST', '/api/devices', async ({ req, env }) => {
@@ -483,8 +535,8 @@ route('POST', '/api/devices', async ({ req, env }) => {
 // --- staff app: scan, stamp, redeem, clock in and out ---
 async function cardByCode(env: Env, raw: unknown) {
   const code = String(raw ?? '').trim().toUpperCase();
-  const m = await env.DB.prepare(`select m.id, m.cafe_id, m.stamps, c.stamp_goal from memberships m join cafes c on c.id = m.cafe_id where m.member_code = ?`)
-    .bind(code).first<{ id: string; cafe_id: string; stamps: number; stamp_goal: number }>();
+  const m = await env.DB.prepare(`select m.id, m.cafe_id, m.user_id, m.stamps, c.stamp_goal from memberships m join cafes c on c.id = m.cafe_id where m.member_code = ?`)
+    .bind(code).first<{ id: string; cafe_id: string; user_id: string; stamps: number; stamp_goal: number }>();
   if (!m) throw new HttpError(404, 'Card not found.');
   return m;
 }
@@ -493,7 +545,7 @@ route('POST', '/api/staff/stamp', async ({ req, env }) => {
   const u = await requireUser(req, env);
   const b = await body(req);
   const m = await cardByCode(env, b.code);
-  await requireStaff(env, u.id, m.cafe_id);
+  await requireStaffForCard(env, u.id, m);
   const room = m.stamp_goal - m.stamps;
   if (room <= 0) throw new HttpError(409, 'The card is full. Give the reward first.');
   const qty = Math.min(Math.max(1, Math.min(Number(b.qty) || 1, 10)), room); // never count more stamps than were really added
@@ -509,7 +561,7 @@ route('POST', '/api/staff/redeem', async ({ req, env }) => {
   const u = await requireUser(req, env);
   const b = await body(req);
   const m = await cardByCode(env, b.code);
-  await requireStaff(env, u.id, m.cafe_id);
+  await requireStaffForCard(env, u.id, m);
   const r = await env.DB.prepare(`update memberships set stamps = stamps - ?, rewards_redeemed = rewards_redeemed + 1 where id = ? and stamps >= ?`).bind(m.stamp_goal, m.id, m.stamp_goal).run();
   if (!r.meta.changes) throw new HttpError(409, 'The card is not full yet.');
   await env.DB.prepare(`insert into stamp_events (membership_id, cafe_id, staff_user_id, kind, qty, created_at) values (?, ?, ?, 'redeem', 1, ?)`).bind(m.id, m.cafe_id, u.id, now()).run();
@@ -553,18 +605,21 @@ route('POST', '/api/cafes', async ({ req, env }) => {
   const b = await body(req);
   const lat = Number(b.lat), lng = Number(b.lng);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new HttpError(400, 'lat and lng are required.');
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new HttpError(400, 'lat and lng are not valid.');
   const kind = b.kind === 'restaurant' ? 'restaurant' : 'cafe';
+  const mine = await env.DB.prepare(`select count(*) as n from cafes where owner_id = ?`).bind(u.id).first<{ n: number }>();
+  if ((mine?.n ?? 0) >= 3) throw new HttpError(429, 'You can add up to 3 cafes. Contact us for more.');
   const id = uuid();
-  // For paying clients only: you may prefer to create cafes yourself, or insert with is_active = 0 until the plan is paid.
+  // A new cafe stays hidden (is_active = 0) until you approve it: in D1, run update cafes set is_active = 1 where id = '...'.
   await env.DB.batch([
-    env.DB.prepare(`insert into cafes (id, owner_id, name, kind, area, city, lat, lng, opens, closes, brand, stamp_goal, reward_text)
-                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    env.DB.prepare(`insert into cafes (id, owner_id, name, kind, area, city, lat, lng, opens, closes, brand, stamp_goal, reward_text, is_active)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`)
       .bind(id, u.id, str(b.name, 80, 'Name', true), kind, str(b.area, 60, 'Area'), str(b.city, 60, 'City') ?? 'Mysuru', lat, lng,
-        str(b.opens, 5, 'opens'), str(b.closes, 5, 'closes'), b.brand ? cleanBrand(b.brand) : '{"bg":"#0b0b0b","ink":"#fafafa","acc":"#d9a066","pattern":"dots"}',
+        hhmm(b.opens, 'opens'), hhmm(b.closes, 'closes'), b.brand ? cleanBrand(b.brand) : '{"bg":"#0b0b0b","ink":"#fafafa","acc":"#d9a066","pattern":"dots"}',
         Math.max(1, Math.min(Number(b.stamp_goal) || 8, 20)), str(b.reward_text, 60, 'reward_text') ?? 'Free filter coffee'),
     env.DB.prepare(`insert into staff (id, cafe_id, user_id, role) values (?, ?, ?, 'owner')`).bind(uuid(), id, u.id),
   ]);
-  return json({ id }, 201);
+  return json({ id, pending_approval: true }, 201);
 });
 
 route('PATCH', '/api/cafes/:id', async ({ req, env, p }) => {
@@ -574,8 +629,8 @@ route('PATCH', '/api/cafes/:id', async ({ req, env, p }) => {
   const sets: string[] = []; const vals: unknown[] = [];
   if ('name' in b) { sets.push('name = ?'); vals.push(str(b.name, 80, 'Name', true)); }
   if ('area' in b) { sets.push('area = ?'); vals.push(str(b.area, 60, 'Area')); }
-  if ('opens' in b) { sets.push('opens = ?'); vals.push(str(b.opens, 5, 'opens')); }
-  if ('closes' in b) { sets.push('closes = ?'); vals.push(str(b.closes, 5, 'closes')); }
+  if ('opens' in b) { sets.push('opens = ?'); vals.push(hhmm(b.opens, 'opens')); }
+  if ('closes' in b) { sets.push('closes = ?'); vals.push(hhmm(b.closes, 'closes')); }
   if ('reward_text' in b) { sets.push('reward_text = ?'); vals.push(str(b.reward_text, 60, 'reward_text', true)); }
   if ('stamp_goal' in b) { sets.push('stamp_goal = ?'); vals.push(Math.max(1, Math.min(Number(b.stamp_goal) || 8, 20))); }
   if ('brand' in b) { sets.push('brand = ?'); vals.push(cleanBrand(b.brand)); }
@@ -602,7 +657,7 @@ route('POST', '/api/cafes/:id/offers', async ({ req, env, p }) => {
   await requireManager(env, u.id, p.id);
   const b = await body(req);
   const id = uuid();
-  await env.DB.prepare(`insert into offers (id, cafe_id, title, ends_at) values (?, ?, ?, ?)`).bind(id, p.id, str(b.title, 100, 'Title', true), str(b.ends_at, 30, 'ends_at')).run();
+  await env.DB.prepare(`insert into offers (id, cafe_id, title, ends_at) values (?, ?, ?, ?)`).bind(id, p.id, str(b.title, 100, 'Title', true), endsAt(b.ends_at)).run();
   return json({ id }, 201);
 });
 
@@ -612,11 +667,14 @@ route('POST', '/api/cafes/:id/staff', async ({ req, env, p }) => {
   const b = await body(req);
   const phone = normalizePhone(b.phone);
   const role = b.role === 'manager' ? 'manager' : 'staff';
+  const me = await requireManager(env, u.id, p.id);
+  if (role === 'manager' && me.role !== 'owner') throw new HttpError(403, 'Only the owner can add a manager.');
   await env.DB.prepare(`insert into users (id, phone) values (?, ?) on conflict(phone) do nothing`).bind(uuid(), phone).run();
   const target = await env.DB.prepare(`select id from users where phone = ?`).bind(phone).first<{ id: string }>();
   await env.DB.prepare(`insert into staff (id, cafe_id, user_id, role, hourly_rate) values (?, ?, ?, ?, ?)
-                        on conflict(cafe_id, user_id) do update set role = excluded.role, hourly_rate = excluded.hourly_rate, is_active = 1`)
-    .bind(uuid(), p.id, target!.id, role, Math.max(0, Number(b.hourly_rate) || 0)).run();
+                        on conflict(cafe_id, user_id) do update set role = excluded.role, hourly_rate = excluded.hourly_rate, is_active = 1
+                        where staff.role != 'owner'`)
+    .bind(uuid(), p.id, target!.id, role, Math.min(100000, Math.max(0, Number(b.hourly_rate) || 0))).run();
   return json({ ok: true }, 201);
 });
 
@@ -651,7 +709,12 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
     try {
-      if (url.pathname.startsWith('/api/')) await ensureDb(env);
+      if (url.pathname.startsWith('/api/')) {
+        // Block cross-site writes: browsers send Origin on them, so a page on another site is turned away.
+        const origin = req.headers.get('origin');
+        if (origin && req.method !== 'GET' && req.method !== 'HEAD' && new URL(origin).host !== url.host) throw new HttpError(403, 'Cross-site request blocked.');
+        await ensureDb(env);
+      }
       for (const [method, re, handler] of routes) {
         if (req.method !== method) continue;
         const m = re.exec(url.pathname);

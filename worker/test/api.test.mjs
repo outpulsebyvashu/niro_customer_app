@@ -34,7 +34,7 @@ const call = async (method, path, { token, body, raw, type } = {}) => {
   const headers = { ...(token ? { authorization: 'Bearer ' + token } : {}) };
   let b;
   if (raw) { b = raw; headers['content-type'] = type; } else if (body !== undefined) { b = JSON.stringify(body); headers['content-type'] = 'application/json'; }
-  const res = await worker.fetch(new Request('https://x.test' + path, { method, headers, body: b }), env);
+  const res = await worker.fetch(new Request('http://localhost' + path, { method, headers, body: b }), env);
   const text = await res.text();
   let data; try { data = JSON.parse(text); } catch { data = text; }
   return { status: res.status, data, headers: res.headers };
@@ -110,7 +110,7 @@ ok(await call('PATCH', '/api/memberships/' + card.id, { token: me, body: { offer
 assert.equal((await call('PATCH', '/api/memberships/' + card.id, { token: other, body: { offers: true } })).status, 404); step('cannot edit someone else\'s card');
 
 // ---- customers cannot stamp ----
-assert.equal((await call('POST', '/api/staff/stamp', { token: me, body: { code: card.member_code } })).status, 403); step('customer cannot add stamps');
+assert.equal((await call('POST', '/api/staff/stamp', { token: me, body: { code: card.member_code } })).status, 404); step('customer cannot add stamps');
 
 // ---- nearby alert cap (2 a day, all cafes) ----
 let a = ok(await call('POST', '/api/geo-alerts', { token: other, body: { cafe_id: 'agr' } })); assert.equal(a.allowed, true);
@@ -127,12 +127,15 @@ assert.equal((await call('POST', '/api/devices', { token: me, body: { token: 't'
 const owner = await login('9000000001', 'Asha');
 const created = ok(await call('POST', '/api/cafes', { token: owner, body: { name: 'Test Cafe', lat: 12.3, lng: 76.6, area: 'Gokulam', brand: { bg: '#112233', ink: '#ffffff', acc: '#ff8800', pattern: 'grid' }, stamp_goal: 3 } }), 201);
 const cid = created.id;
+assert.equal(created.pending_approval, true);
+assert.equal(ok(await call('GET', '/api/cafes/nearby?lat=12.3&lng=76.6')).cafes.some((c) => c.id === cid), false); step('new cafe is hidden until approved');
+sqlite.exec(`update cafes set is_active = 1 where id = '${cid}'`);
 assert.equal((await call('POST', '/api/cafes', { token: owner, body: { name: 'Bad', lat: 1, lng: 1, brand: { bg: 'red', ink: '#fff', acc: '#fff' } } })).status, 400); step('brand colours validated');
 ok(await call('PATCH', '/api/cafes/' + cid, { token: owner, body: { reward_text: 'Free cake', brand: { bg: '#000000', ink: '#ffffff', acc: '#00ff00', pattern: 'stripes' } } }));
 assert.equal((await call('PATCH', '/api/cafes/' + cid, { token: me, body: { name: 'Hacked' } })).status, 403); step('only the owner edits the cafe');
-const ph = ok(await call('POST', '/api/cafes/' + cid + '/photos', { token: owner, raw: png, type: 'image/jpeg' }), 201);
+const ph = ok(await call('POST', '/api/cafes/' + cid + '/photos', { token: owner, raw: png, type: 'image/png' }), 201);
 assert.equal((await call('GET', ph.url)).status, 200); step('cafe photo public from R2');
-assert.equal((await call('POST', '/api/cafes/' + cid + '/photos', { token: me, raw: png, type: 'image/jpeg' })).status, 403);
+assert.equal((await call('POST', '/api/cafes/' + cid + '/photos', { token: me, raw: png, type: 'image/png' })).status, 403);
 ok(await call('POST', '/api/cafes/' + cid + '/offers', { token: owner, body: { title: 'Free cookie' } }), 201);
 ok(await call('POST', '/api/cafes/' + cid + '/staff', { token: owner, body: { phone: '9000000002', role: 'staff', hourly_rate: 150 } }), 201);
 const barista = await login('9000000002', 'Ravi');
@@ -143,8 +146,8 @@ let s = ok(await call('POST', '/api/staff/stamp', { token: barista, body: { code
 assert.equal(s.stamps, 2); assert.equal(s.reward_ready, false);
 s = ok(await call('POST', '/api/staff/stamp', { token: barista, body: { code: mine.member_code, qty: 5 } }));
 assert.equal(s.stamps, 3); assert.equal(s.reward_ready, true); step('stamps add up, capped at the goal');
-assert.equal((await call('POST', '/api/staff/stamp', { token: owner, body: { code: card.member_code } })).status, 403); step('staff cannot stamp another cafe\'s cards');
-assert.equal((await call('POST', '/api/staff/redeem', { token: barista, body: { code: card.member_code } })).status, 403);
+assert.equal((await call('POST', '/api/staff/stamp', { token: owner, body: { code: card.member_code } })).status, 404); step('staff cannot stamp another cafe\'s cards');
+assert.equal((await call('POST', '/api/staff/redeem', { token: barista, body: { code: card.member_code } })).status, 404);
 s = ok(await call('POST', '/api/staff/redeem', { token: barista, body: { code: mine.member_code } }));
 assert.equal(s.stamps, 0); assert.equal(s.rewards_redeemed, 1);
 assert.equal((await call('POST', '/api/staff/redeem', { token: barista, body: { code: mine.member_code } })).status, 409); step('reward redeemed once, not twice');
@@ -172,4 +175,31 @@ assert.equal((await call('GET', '/api/me', { token: me })).status, 401);
 assert.equal(sqlite.prepare('select count(*) n from memberships where user_id = (select id from users where phone = ?)').get('+919335512597').n, 0);
 assert.equal([...store.keys()].filter((k) => k.startsWith('avatars/')).length, 0); step('delete my account removes cards and photo');
 assert.equal((await call('GET', '/api/nothing')).status, 404);
+// ---- security checks ----
+const raw = (path, init = {}, host = 'https://niro.example') => worker.fetch(new Request(host + path, init), env);
+// the fixed test code must not work on a live (non-localhost) site
+let r = await raw('/api/auth/request-otp', { method: 'POST', body: JSON.stringify({ phone: '9111111111', name: 'X' }), headers: { 'content-type': 'application/json' } });
+assert.equal(r.status, 500); // no SMS provider set up: fails closed instead of using 123456
+r = await raw('/api/auth/verify', { method: 'POST', body: JSON.stringify({ phone: '9111111111', code: '123456' }), headers: { 'content-type': 'application/json' } });
+assert.equal(r.status, 400); step('test code 123456 ignored on a live site');
+// another website cannot make changes for a signed-in user
+r = await raw('/api/me', { method: 'PATCH', body: '{"name":"Evil"}', headers: { 'content-type': 'application/json', origin: 'https://evil.example', authorization: 'Bearer ' + owner } });
+assert.equal(r.status, 403); step('cross-site writes blocked');
+// a fake image is refused
+assert.equal((await call('PUT', '/api/me/photo', { token: owner, raw: new TextEncoder().encode('<script>alert(1)</script>'), type: 'image/png' })).status, 415); step('fake image refused');
+// manager cannot demote the owner or add managers
+ok(await call('POST', '/api/cafes/' + cid + '/staff', { token: owner, body: { phone: '9000000003', role: 'manager' } }), 201);
+const mgr = await login('9000000003', 'Meera');
+assert.equal((await call('POST', '/api/cafes/' + cid + '/staff', { token: mgr, body: { phone: '9000000001', role: 'staff' } })).status, 201);
+assert.equal(sqlite.prepare(`select role from staff where cafe_id = ? and user_id = (select id from users where phone = '+919000000001')`).get(cid).role, 'owner');
+assert.equal((await call('POST', '/api/cafes/' + cid + '/staff', { token: mgr, body: { phone: '9000000009', role: 'manager' } })).status, 403); step('owner role protected, only owner adds managers');
+// staff cannot stamp their own card
+ok(await call('POST', '/api/cafes/' + cid + '/join', { token: barista, body: {} }), 201);
+const own = ok(await call('GET', '/api/memberships', { token: barista })).cards[0];
+assert.equal((await call('POST', '/api/staff/stamp', { token: barista, body: { code: own.member_code } })).status, 403); step('staff cannot stamp own card');
+// parallel code guesses cannot beat the 5-try limit
+await call('POST', '/api/auth/request-otp', { body: { phone: '9222222222', name: 'G' } });
+const guesses = await Promise.all(Array.from({ length: 20 }, (_, i) => call('POST', '/api/auth/verify', { body: { phone: '9222222222', code: String(100000 + i) } })));
+assert.ok(guesses.filter((g) => g.status === 400).length <= 5); step('OTP guess limit holds under parallel tries');
+
 console.log('\nALL PASSED');

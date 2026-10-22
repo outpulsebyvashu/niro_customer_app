@@ -44,4 +44,4 @@ iPhone Safari: Share > Add to Home Screen. After changing files, bump `VERSION` 
 ## Deploy without GitHub or a terminal (phone friendly)
 Build the Pages bundle (static app + `_worker.js`, the compiled `worker/src/index.ts`) and drag it into
 Cloudflare Pages > Upload assets. Then add the bindings in the Pages project settings:
-D1 database `DB` = `niro-customer` and the variable `DEV_OTP` = `1` while testing. The tables are created automatically on the first API call.
+D1 database `DB` = `niro-customer` . Do not set `DEV_OTP` on the live site (it is ignored there anyway). The tables are created automatically on the first API call.

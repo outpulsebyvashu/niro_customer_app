@@ -17,6 +17,6 @@
   "observability": { "enabled": true },
   "vars": {
     // "1" = no SMS is sent and every OTP is 123456. Use only while testing. Remove for production.
-    "DEV_OTP": "1"
+    "DEV_OTP": "0"
   }
 }

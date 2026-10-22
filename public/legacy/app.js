@@ -489,14 +489,16 @@ function bvars(b){return '--b-bg:'+b.bg+';--b-ink:'+b.ink+';--b-acc:'+b.acc}
 function initials(n){return n.replace(/&amp;/g,' ').split(/\s+/).filter(function(w){return /^[A-Za-z]/.test(w)}).slice(0,2).map(function(w){return w.charAt(0).toUpperCase()}).join('')}
 
 /* ---------- profile ---------- */
-function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;')}
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
+/* Only real image data or our own media path may go in an img src. Anything else is dropped. */
+function safeImg(u){u=String(u||'');return (/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+\/=]+$/.test(u)||/^\/api\/media\/[\w\/.-]+$/.test(u))?u:''}
 function fmtPh(d){d=d||'';return d.length>5?d.slice(0,5)+' '+d.slice(5):d}
 function updateHeader(){
   var p=state.tab==='profile', a=$('#ava');
   $('#top').classList.toggle('prof',p);
   $('#hi').textContent=p?'Profile':(state.auth?'Hi, '+state.me.name:greet());
   a.dataset.act=p?'back':'profile'; a.setAttribute('aria-label',p?'Close profile':(state.auth?'Profile':'Sign up or log in'));
-  a.innerHTML=p?X_ICON:(!state.auth?USER_ICON:state.me.photo?'<img src="'+state.me.photo+'" alt="">':esc(state.me.name.charAt(0).toUpperCase()));
+  a.innerHTML=p?X_ICON:(!state.auth?USER_ICON:safeImg(state.me.photo)?'<img src="'+esc(safeImg(state.me.photo))+'" alt="">':esc(state.me.name.charAt(0).toUpperCase()));
 }
 var toastT=0;
 function toast(msg){var t=$('#toast');t.textContent=msg;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(function(){t.hidden=true},2400)}
@@ -509,7 +511,7 @@ function renderProfile(){
   var list=joined(), m=state.me, off=!state.prefs.offers;
   var stamps=list.reduce(function(a,c){return a+c.stamps},0), ready=list.filter(function(c){return c.stamps>=GOAL}).length;
   var ph=m.phone?'+91 ••••• •••'+m.phone.slice(-2):'+91 ••••• •••••';
-  var s='<div class="me"><div class="mav">'+(m.photo?'<img src="'+m.photo+'" alt="">':esc(m.name.charAt(0).toUpperCase()))+'</div><div class="mt2"><h2>'+esc(m.name)+'</h2><p>'+ph+' · verified</p></div><button class="edit" data-act="edit">Edit</button></div>';
+  var s='<div class="me"><div class="mav">'+(safeImg(m.photo)?'<img src="'+esc(safeImg(m.photo))+'" alt="">':esc(m.name.charAt(0).toUpperCase()))+'</div><div class="mt2"><h2>'+esc(m.name)+'</h2><p>'+ph+' · verified</p></div><button class="edit" data-act="edit">Edit</button></div>';
   s+='<div class="stats"><div><b>'+list.length+'</b><span>Cards</span></div><div><b>'+stamps+'</b><span>Stamps</span></div><div><b>'+ready+'</b><span>Rewards ready</span></div></div>';
   var sd=[]; if(m.birthday)sd.push({l:'Birthday',d:m.birthday}); (m.dates||[]).forEach(function(x){sd.push(x)});
   sd.forEach(function(x){x.n=inDays(x.d)}); sd.sort(function(a,b){return a.n-b.n});
@@ -539,10 +541,10 @@ function dm(s){var d=pd(s);return d.getDate()+' '+MON[d.getMonth()]}
 function inDays(s){var d=pd(s),n=new Date(),t=new Date(n.getFullYear(),n.getMonth(),n.getDate()),x=new Date(t.getFullYear(),d.getMonth(),d.getDate());if(x<t)x=new Date(t.getFullYear()+1,d.getMonth(),d.getDate());return Math.round((x-t)/864e5)}
 function inTxt(n){return n===0?'Today':n===1?'Tomorrow':'in '+n+' days'}
 function todayISO(){var n=new Date();return n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0')+'-'+String(n.getDate()).padStart(2,'0')}
-function dRows(){return edD.map(function(d,i){return '<div class="dr"><input class="dl" type="text" placeholder="e.g. Anniversary" maxlength="24" value="'+esc(d.l)+'" aria-label="Name of special day"><input class="dd" type="date" value="'+d.d+'" aria-label="Date"><button type="button" class="x" data-act="rmdate" data-id="'+i+'" aria-label="Remove date">'+X_ICON+'</button></div>'}).join('')}
+function dRows(){return edD.map(function(d,i){return '<div class="dr"><input class="dl" type="text" placeholder="e.g. Anniversary" maxlength="24" value="'+esc(d.l)+'" aria-label="Name of special day"><input class="dd" type="date" value="'+esc(d.d)+'" aria-label="Date"><button type="button" class="x" data-act="rmdate" data-id="'+i+'" aria-label="Remove date">'+X_ICON+'</button></div>'}).join('')}
 function syncD(){var rows=document.querySelectorAll('#sd .dr');edD=[].map.call(rows,function(r){return {l:r.querySelector('.dl').value,d:r.querySelector('.dd').value}})}
 function paintAdd(){var b=$('#addd');if(b)b.hidden=edD.length>=5}
-function paintPv(){var v=$('#epv');if(!v)return;v.innerHTML=edP?'<img src="'+edP+'" alt="Your photo">':esc(($('#en').value.trim()||state.me.name).charAt(0).toUpperCase());$('#rmp').hidden=!edP}
+function paintPv(){var v=$('#epv');if(!v)return;v.innerHTML=safeImg(edP)?'<img src="'+esc(safeImg(edP))+'" alt="Your photo">':esc(($('#en').value.trim()||state.me.name).charAt(0).toUpperCase());$('#rmp').hidden=!edP}
 function openEdit(){
   var m=state.me; edP=m.photo||''; edD=(m.dates||[]).map(function(d){return {l:d.l,d:d.d}});
   var diets=['','Vegetarian','Eggetarian','Non-vegetarian','Vegan'];
@@ -550,7 +552,7 @@ function openEdit(){
     '<form id="editform" class="jf" novalidate>'+
     '<div class="phr"><div class="mav big" id="epv"></div><div class="phb"><button type="button" class="s" data-act="photo">Change photo</button><button type="button" class="s" id="rmp" data-act="rmphoto" hidden>Remove</button></div><input id="ep" type="file" accept="image/*" hidden></div>'+
     '<label for="en">Name</label><input id="en" type="text" autocomplete="given-name" value="'+esc(m.name)+'"><p class="err" id="eerr" hidden>Enter your name to continue.</p>'+
-    '<label for="eb">Birthday</label><input id="eb" type="date" max="'+todayISO()+'" value="'+m.birthday+'"><p class="hint">Cafes can send you a treat on the day. Only day and month are shown.</p>'+
+    '<label for="eb">Birthday</label><input id="eb" type="date" max="'+todayISO()+'" value="'+esc(m.birthday)+'"><p class="hint">Cafes can send you a treat on the day. Only day and month are shown.</p>'+
     '<label for="em">Email (optional)</label><input id="em" type="email" autocomplete="email" placeholder="you@example.com" value="'+esc(m.email)+'"><p class="err" id="mer" hidden>Enter a valid email address.</p>'+
     '<label>Special days</label><div id="sd">'+dRows()+'</div><button type="button" class="addd" id="addd" data-act="adddate">+ Add a special day</button>'+
     '<label for="ed">Food preference</label><select id="ed">'+diets.map(function(x){return '<option value="'+x+'"'+(m.diet===x?' selected':'')+'>'+(x||'Not set')+'</option>'}).join('')+'</select>'+
@@ -560,7 +562,7 @@ function openEdit(){
 }
 document.addEventListener('change',function(e){
   if(e.target.id!=='ep')return; var f=e.target.files&&e.target.files[0]; if(!f)return;
-  if(!/^image\//.test(f.type)){toast('Choose an image file');return}
+  if(!/^image\/(png|jpeg|webp)$/.test(f.type)){toast('Choose a JPEG, PNG or WebP photo');return}
   var fr=new FileReader();
   fr.onload=function(){var img=new Image();img.onload=function(){var s=256,c=document.createElement('canvas');c.width=c.height=s;var k=Math.min(img.width,img.height);c.getContext('2d').drawImage(img,(img.width-k)/2,(img.height-k)/2,k,k,0,0,s,s);edP=c.toDataURL('image/jpeg',0.85);paintPv()};img.onerror=function(){toast('Could not read that image')};img.src=fr.result};
   fr.readAsDataURL(f);
@@ -696,10 +698,16 @@ state.theme=getTheme(); if(state.theme!=='system')applyTheme(state.theme);
 
 renderHome(); renderWallet(); setTab('home'); detect();
 /* Keep the login and profile on this device, so a reload or reopen stays signed in. */
+function cleanMe(o){
+  var t=function(v,n){return typeof v==='string'?v.slice(0,n):''}, dt=function(v){return /^\d{4}-\d{2}-\d{2}$/.test(v)?v:''};
+  return {name:t(o.name,60),phone:/^\d{10}$/.test(o.phone)?o.phone:'',photo:safeImg(o.photo),birthday:dt(o.birthday),email:t(o.email,120),
+    diet:['','Vegetarian','Eggetarian','Non-vegetarian','Vegan'].indexOf(o.diet)>-1?o.diet:'',fav:t(o.fav,40),
+    dates:(Array.isArray(o.dates)?o.dates:[]).slice(0,5).map(function(d){return {l:t(d&&d.l,24),d:dt(d&&d.d)}}).filter(function(d){return d.d})};
+}
 function persistSess(){try{if(state.auth)localStorage.setItem('cl-sess',JSON.stringify({me:state.me,joined:walletOrder.filter(function(i){return byId(i)&&byId(i).joined})}));else localStorage.removeItem('cl-sess')}catch(e){}}
-(function(){try{var s=JSON.parse(localStorage.getItem('cl-sess')||'null');if(s&&s.me&&s.me.name&&/^\d{10}$/.test(s.me.phone)){state.me=Object.assign(state.me,s.me);state.pend='';signIn();closeSheet();$("#toast").hidden=true}}catch(e){}})();
+(function(){try{var s=JSON.parse(localStorage.getItem('cl-sess')||'null');if(s&&s.me&&s.me.name&&/^\d{10}$/.test(s.me.phone)){state.me=cleanMe(s.me);state.pend='';signIn();closeSheet();$("#toast").hidden=true}}catch(e){}})();
 var lastSess='';setInterval(function(){var j=state.auth?JSON.stringify(state.me):'';if(j!==lastSess){lastSess=j;persistSess()}},800);
-document.addEventListener('visibilitychange',persistSess);
+document.addEventListener('visibilitychange',function(){if(state.auth)persistSess()});
 
 if('serviceWorker' in navigator&&(location.protocol==='https:'||location.hostname==='localhost')){
   var regSw=function(){navigator.serviceWorker.register('/sw.js').catch(function(){})};
