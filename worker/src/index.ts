@@ -21,6 +21,9 @@ export interface Env {
   TWILIO_SID?: string;     // secrets: wrangler secret put TWILIO_SID, etc.
   TWILIO_TOKEN?: string;
   TWILIO_FROM?: string;
+  GOOGLE_WALLET_ISSUER_ID?: string;  // Google Wallet: issuer id from pay.google.com/business/console
+  GOOGLE_WALLET_SA_EMAIL?: string;   // Google Wallet: service account email
+  GOOGLE_WALLET_PRIVATE_KEY?: string; // secret: service account private key (the -----BEGIN PRIVATE KEY----- text)
 }
 
 type User = {
@@ -256,7 +259,7 @@ async function requireAdmin(req: Request, env: Env): Promise<User> {
 async function meJson(env: Env, u: User) {
   const d = await env.DB.prepare(`select id, label, on_date from special_dates where user_id = ? order by on_date`).bind(u.id).all<{ id: string; label: string; on_date: string }>();
   const g = await env.DB.prepare(`select count(*) as n from geo_alerts where user_id = ? and sent_at >= ?`).bind(u.id, istDayStart()).first<{ n: number }>();
-  return { ...publicUser(u, d.results), geo_used_today: g?.n ?? 0, geo_cap: GEO_DAILY_CAP, photos_enabled: !!env.MEDIA, is_admin: isAdmin(env, u) };
+  return { ...publicUser(u, d.results), geo_used_today: g?.n ?? 0, geo_cap: GEO_DAILY_CAP, photos_enabled: !!env.MEDIA, google_wallet: walletReady(env), is_admin: isAdmin(env, u) };
 }
 
 type CafeRow = {
@@ -555,6 +558,43 @@ route('DELETE', '/api/saved-offers/:id', async ({ req, env, p }) => {
   const u = await requireUser(req, env);
   await env.DB.prepare(`delete from saved_offers where user_id = ? and offer_id = ?`).bind(u.id, p.id).run();
   return json({ ok: true });
+});
+
+// --- Google Wallet: "Add to Google Wallet" link for one loyalty card ---
+const walletReady = (env: Env) => !!(env.GOOGLE_WALLET_ISSUER_ID && env.GOOGLE_WALLET_SA_EMAIL && env.GOOGLE_WALLET_PRIVATE_KEY);
+const b64u = (b: ArrayBuffer | string) => {
+  const bytes = typeof b === 'string' ? new TextEncoder().encode(b) : new Uint8Array(b);
+  let t = ''; for (const x of bytes) t += String.fromCharCode(x);
+  return btoa(t).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
+async function signRs256(pem: string, data: string): Promise<string> {
+  const der = Uint8Array.from(atob(pem.replace(/\\n/g, '\n').replace(/-----[A-Z ]+-----/g, '').replace(/\s+/g, '')), (c) => c.charCodeAt(0));
+  const key = await crypto.subtle.importKey('pkcs8', der, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
+  return b64u(await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, new TextEncoder().encode(data)));
+}
+route('GET', '/api/memberships/:id/wallet/google', async ({ req, env, p }) => {
+  const u = await requireUser(req, env);
+  if (!walletReady(env)) throw new HttpError(503, 'Google Wallet is not set up yet.');
+  const m = await env.DB.prepare(`select m.id, m.member_code, m.stamps, c.id as cafe_id, c.name, c.brand, c.stamp_goal, c.reward_text
+    from memberships m join cafes c on c.id = m.cafe_id where m.id = ? and m.user_id = ?`).bind(p.id, u.id).first<{ id: string; member_code: string; stamps: number; cafe_id: string; name: string; brand: string; stamp_goal: number; reward_text: string }>();
+  if (!m) throw new HttpError(404, 'Card not found.');
+  const origin = new URL(req.url).origin, issuer = env.GOOGLE_WALLET_ISSUER_ID!;
+  const classId = `${issuer}.cafe_${m.cafe_id.replace(/[^\w.-]/g, '_')}`;
+  const bg = (JSON.parse(m.brand) as { bg: string }).bg;
+  const claims = {
+    iss: env.GOOGLE_WALLET_SA_EMAIL, aud: 'google', typ: 'savetowallet', origins: [origin], iat: Math.floor(Date.now() / 1000),
+    payload: {
+      loyaltyClasses: [{ id: classId, issuerName: 'Niro', programName: m.name, reviewStatus: 'UNDER_REVIEW', hexBackgroundColor: bg,
+        programLogo: { sourceUri: { uri: `${origin}/icons/icon-512.png` }, contentDescription: { defaultValue: { language: 'en-US', value: 'Niro' } } } }],
+      loyaltyObjects: [{ id: `${issuer}.m_${m.id.replace(/[^\w.-]/g, '_')}`, classId, state: 'ACTIVE', accountId: m.member_code, accountName: u.name,
+        barcode: { type: 'QR_CODE', value: m.member_code, alternateText: m.member_code },
+        loyaltyPoints: { label: 'Stamps', balance: { string: `${m.stamps} / ${m.stamp_goal}` } },
+        textModulesData: [{ header: 'Reward', body: m.reward_text, id: 'reward' }] }],
+    },
+  };
+  const head = b64u(JSON.stringify({ alg: 'RS256', typ: 'JWT' })), body = b64u(JSON.stringify(claims));
+  const sig = await signRs256(env.GOOGLE_WALLET_PRIVATE_KEY!, `${head}.${body}`);
+  return json({ url: `https://pay.google.com/gp/v/save/${head}.${body}.${sig}` });
 });
 
 route('GET', '/api/memberships/:id/history', async ({ req, env, p }) => {

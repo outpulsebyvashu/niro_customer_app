@@ -87,7 +87,7 @@ function applyMe(m){
   state.me={name:m.name||'',phone:String(m.phone||'').replace(/^\+91/,''),photo:safeImg(m.photo_url),birthday:m.birthday||'',email:m.email||'',diet:m.diet||'',fav:m.fav_order||'',
     dates:(m.special_dates||[]).map(function(d){return {l:d.label,d:d.on_date}})};
   state.prefs=Object.assign({stamps:true,offers:true,treats:true,geo:true},m.prefs||{});
-  state.geo.used=m.geo_used_today||0; state.geo.cap=m.geo_cap||2; state.photosOn=!!m.photos_enabled; state.admin=!!m.is_admin;
+  state.geo.used=m.geo_used_today||0; state.geo.cap=m.geo_cap||2; state.photosOn=!!m.photos_enabled; state.admin=!!m.is_admin; state.gwallet=!!m.google_wallet;
 }
 function loadCards(){
   return api('GET','/api/memberships').then(function(d){
@@ -196,6 +196,7 @@ function openSheet(id){
   $('#scrim').classList.remove('center');
   s+='<div class="grab"></div><div class="bn pt-'+b.pat+'" style="'+bvars(b)+'"><span class="mono">'+esc(initials(c.name))+'</span><div class="bn-t"><h3>'+esc(c.name)+'</h3><p>'+esc(c.area)+' · '+(c.stamps>=c.goal?'Reward ready':(c.goal-c.stamps)+' stamps to your next reward')+'</p></div><button class="x" data-act="close" aria-label="Close">'+X_ICON+'</button></div>';
   s+=QR.svg(c.mid,'Member QR code')+'<div class="mid">MEMBER '+esc(c.mid)+'</div>';
+  if(state.gwallet)s+='<button class="gw-add" data-act="gwallet" data-id="'+c.id+'"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H17v3H6.5a.9.9 0 0 0 0 1.8H19a1 1 0 0 1 1 1V18a2 2 0 0 1-2 2H6.5A2.5 2.5 0 0 1 4 17.5zM15.5 14.2a1.2 1.2 0 1 0 2.4 0 1.2 1.2 0 0 0-2.4 0z"/></svg>Add to Google Wallet</button>';
   s+='<div class="brand-scope" style="'+bvars(b)+'"><div class="grid8">';
   for(var i=0;i<c.goal;i++)s+='<div class="st'+(i<c.stamps?' on':'')+'">'+(i<c.stamps?'✓':(i+1))+'</div>';
   s+='</div></div><ul class="hist" id="hist"><li>Loading history…<span></span></li></ul>';
@@ -469,6 +470,7 @@ document.addEventListener('click',function(e){
     else if(act==='save')saveOffer(id);
     else if(act==='savedgo')openSaved();
     else if(act==='unsave'){state.saved[id]=false;api('DELETE','/api/saved-offers/'+id).then(loadSaved).then(function(){renderHome();renderProfile();openSaved()}).catch(function(x){toast(x.message)})}
+    else if(act==='gwallet'){var gb=a;gb.disabled=true;api('GET','/api/memberships/'+byId(id).mem+'/wallet/google').then(function(d){gb.disabled=false;location.assign(d.url)}).catch(function(x){gb.disabled=false;toast(x.message)})}
     else if(act==='join')openJoin(id);
     else if(act==='route'){var q=byId(id); if(q)openDirections(q)}
     else if(act==='recenter'){if(you.lat!=null)flyTo(you.x,you.y)}

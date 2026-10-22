@@ -248,6 +248,19 @@ assert.ok(guesses.filter((g) => g.status === 400).length <= 5); step('OTP guess 
   const hist = ok(await call('GET', '/api/memberships/' + c2.id + '/history', { token: u1 }));
   assert.equal(hist.events.length, 1); assert.equal(hist.events[0].kind, 'stamp');
   assert.equal((await call('GET', '/api/memberships/' + c2.id + '/history', { token: staffTok })).status, 404); step('card history is private to its owner');
+  // Google Wallet
+  assert.equal((await call('GET', '/api/memberships/' + c2.id + '/wallet/google', { token: u1 })).status, 503); step('wallet: 503 until configured');
+  const { generateKeyPairSync, createPublicKey, verify } = await import('node:crypto');
+  const kp = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  env.GOOGLE_WALLET_ISSUER_ID = '3388000000000000001'; env.GOOGLE_WALLET_SA_EMAIL = 'sa@x.iam.gserviceaccount.com';
+  env.GOOGLE_WALLET_PRIVATE_KEY = kp.privateKey.export({ type: 'pkcs8', format: 'pem' }).replace(/\n/g, '\\n');
+  const wl = ok(await call('GET', '/api/memberships/' + c2.id + '/wallet/google', { token: u1 }));
+  const [h, b, sg] = wl.url.split('/save/')[1].split('.');
+  assert.ok(verify('sha256', Buffer.from(h + '.' + b), kp.publicKey, Buffer.from(sg, 'base64url')));
+  const claims = JSON.parse(Buffer.from(b, 'base64url'));
+  assert.equal(claims.payload.loyaltyObjects[0].barcode.type, 'QR_CODE'); step('wallet: signed link with QR barcode');
+  assert.equal((await call('GET', '/api/memberships/' + c2.id + '/wallet/google', { token: staffTok })).status, 404); step('wallet: only the card owner');
+  delete env.GOOGLE_WALLET_PRIVATE_KEY;
   const exp = await call('GET', '/api/me/export', { token: u1 });
   assert.equal(exp.status, 200); assert.match(exp.headers.get('content-disposition'), /niro-my-data\.json/);
   assert.equal(exp.data.profile.phone, '+919555555555'); assert.equal(exp.data.loyalty_cards.length, 2); assert.equal(exp.data.stamp_history.length, 1); assert.equal(exp.data.saved_offers.length, 1); step('data export has my cards, stamps and offers');

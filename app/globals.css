@@ -312,3 +312,8 @@ button{cursor:pointer;border:0;background:none}
 @keyframes gwio{0%{transform:translateY(105%);opacity:0}30%,70%{transform:translateY(0);opacity:1}100%{transform:translateY(-105%);opacity:0}}
 @keyframes gwin{0%{transform:translateY(105%);opacity:0}100%{transform:translateY(0);opacity:1}}
 @media (prefers-reduced-motion:reduce){#gate .gw{animation:none;opacity:0}#gate .gw.last{opacity:1;transform:none}}
+.sheet .bn{flex:none}.bn h3{overflow-wrap:anywhere}
+.gw-add{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;margin:14px 0 4px;min-height:50px;border:0;border-radius:16px;background:#000;color:#fff;font:600 16px var(--f-body);cursor:pointer}
+.gw-add:disabled{opacity:.6}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]) .gw-add{background:#fff;color:#000}}
+:root[data-theme=dark] .gw-add{background:#fff;color:#000}
