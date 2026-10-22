@@ -695,6 +695,12 @@ function setTheme(t){state.theme=t;try{localStorage.setItem('cl-theme',t)}catch(
 state.theme=getTheme(); if(state.theme!=='system')applyTheme(state.theme);
 
 renderHome(); renderWallet(); setTab('home'); detect();
+/* Keep the login and profile on this device, so a reload or reopen stays signed in. */
+function persistSess(){try{if(state.auth)localStorage.setItem('cl-sess',JSON.stringify({me:state.me,joined:walletOrder.filter(function(i){return byId(i)&&byId(i).joined})}));else localStorage.removeItem('cl-sess')}catch(e){}}
+(function(){try{var s=JSON.parse(localStorage.getItem('cl-sess')||'null');if(s&&s.me&&s.me.name&&/^\d{10}$/.test(s.me.phone)){state.me=Object.assign(state.me,s.me);state.pend='';signIn();closeSheet();$("#toast").hidden=true}}catch(e){}})();
+var lastSess='';setInterval(function(){var j=state.auth?JSON.stringify(state.me):'';if(j!==lastSess){lastSess=j;persistSess()}},800);
+document.addEventListener('visibilitychange',persistSess);
+
 if('serviceWorker' in navigator&&(location.protocol==='https:'||location.hostname==='localhost')){
   var regSw=function(){navigator.serviceWorker.register('/sw.js').catch(function(){})};
   if(document.readyState==='complete')regSw(); else window.addEventListener('load',regSw);

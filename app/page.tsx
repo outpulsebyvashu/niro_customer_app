@@ -14,6 +14,7 @@ export default function Page() {
     <>
       {/* display: contents keeps the page layout identical to the original (no extra box around #app) */}
       <div style={{ display: 'contents' }} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: markup }} />
+      <Script src="/legacy/gate.js" strategy="afterInteractive" />
       <Script src="/legacy/app.js" strategy="afterInteractive" />
     </>
   );
