@@ -334,6 +334,11 @@ assert.ok(guesses.filter((g) => g.status === 400).length <= 5); step('OTP guess 
   assert.equal((await call('GET', '/api/cafes/' + made.id + '/customers', { token: cust })).status, 403); step('partner: customers show name and last 4 digits only');
   const au = ok(await call('GET', '/api/admin/users', { token: adm })).users; assert.ok(au.find((x) => x.phone.endsWith('9666666666') && x.is_client === 1) && au.find((x) => x.name === 'Chitra Rao' && x.cards === 1));
   assert.ok(ok(await call('GET', '/api/admin/staff', { token: adm })).staff.length >= 1); assert.equal((await call('GET', '/api/admin/users', { token: pm })).status, 403); step('admin: users and staff lists');
+  { const art = { w: 8, h: 5, p: ['#112233', '#445566', '#ffffff'], d: '0'.repeat(20) + '1'.repeat(10) + '2'.repeat(10) };
+    ok(await call('PATCH', '/api/cafes/' + made.id, { token: pm, body: { brand: { bg: '#112233', ink: '#ffffff', acc: '#ffaa00', pattern: 'dots', art } } }));
+    const back = ok(await call('GET', '/api/cafes/' + made.id, {})); assert.equal(back.brand.art.d.length, 40);
+    assert.equal((await call('PATCH', '/api/cafes/' + made.id, { token: pm, body: { brand: { bg: '#112233', ink: '#ffffff', acc: '#ffaa00', pattern: 'dots', art: { ...art, d: '9'.repeat(40) } } } })).status, 400);
+    assert.equal((await call('PATCH', '/api/cafes/' + made.id, { token: pm, body: { brand: { bg: '#112233', ink: '#ffffff', acc: '#ffaa00', pattern: 'dots', art: { ...art, w: 999 } } } })).status, 400); step('card design: pixel art saved and validated'); }
   const ov = ok(await call('GET', '/api/admin/overview', { token: adm })); assert.ok(ov.users > 3 && ov.cafes_live >= 1);
   assert.equal((await call('GET', '/api/admin/overview', { token: pm })).status, 403);
   sqlite.prepare('delete from support_messages').run();

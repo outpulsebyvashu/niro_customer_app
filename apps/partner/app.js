@@ -29,7 +29,7 @@ function body(c){
     return '<form id="pf" class="card"><div class="row"><div><label for="pfr">From</label><input id="pfr" type="date" value="'+iso(f)+'"></div><div><label for="pto">To</label><input id="pto" type="date" value="'+iso(t)+'"></div></div><div class="acts"><button>Show hours and pay</button></div></form><div id="pr"></div>'}
   if(tab==='edit'){var b=c.brand;return '<form id="ef" class="card"><label for="en">Name</label><input id="en" maxlength="80" value="'+esc(c.name)+'"><label for="ea">Area</label><input id="ea" maxlength="60" value="'+esc(c.area||'')+'"><div class="row"><div><label for="eo">Opens</label><input id="eo" type="time" value="'+hm(c.opens)+'"></div><div><label for="ec">Closes</label><input id="ec" type="time" value="'+hm(c.closes)+'"></div></div>'+
     '<label for="er">Reward</label><input id="er" maxlength="60" value="'+esc(c.reward_text)+'"><label for="eg">Stamps for a reward</label><input id="eg" type="number" min="1" max="20" value="'+c.stamp_goal+'"><div class="row"><div><label for="b1">Card colour</label><input id="b1" type="color" value="'+esc(b.bg)+'"></div><div><label for="b2">Text</label><input id="b2" type="color" value="'+esc(b.ink)+'"></div><div><label for="b3">Accent</label><input id="b3" type="color" value="'+esc(b.acc)+'"></div></div>'+
-    '<label for="pt">Card pattern</label><select id="pt">'+['dots','stripes','rings','grid'].map(function(p){return '<option'+(b.pattern===p?' selected':'')+'>'+p+'</option>'}).join('')+'</select><p class="mut">The location on the map can only be moved by Niro. Contact us to change it.</p><p class="err" id="eer" hidden></p><div class="acts"><button>Save changes</button></div></form>'}
+    '<label for="pt">Card pattern</label><select id="pt">'+['dots','stripes','rings','grid'].map(function(p){return '<option'+(b.pattern===p?' selected':'')+'>'+p+'</option>'}).join('')+'</select><label>Card design</label><canvas id="artpv" width="336" height="204" style="width:100%;border-radius:18px;image-rendering:pixelated;background:var(--soft)"></canvas><p class="mut" style="margin:6px 0 0">Upload a picture or logo. Niro turns it into pixels for your loyalty card.</p><div class="acts"><button type="button" class="s" id="artbtn">Upload design</button><button type="button" class="danger" id="artrm">Remove design</button></div><input id="artf" type="file" accept="image/png,image/jpeg,image/webp" hidden><p class="mut">The location on the map can only be moved by Niro. Contact us to change it.</p><p class="err" id="eer" hidden></p><div class="acts"><button>Save changes</button></div></form>'}
 }
 function bind(c){
   var f;
@@ -43,8 +43,14 @@ function bind(c){
   document.querySelectorAll('[data-sd]').forEach(function(b){b.onclick=function(){if(!confirm('Remove this person?'))return;api('DELETE','/api/cafes/'+c.id+'/staff/'+b.dataset.sd).then(function(){refresh('Removed')}).catch(function(x){toast(x.message)})}});
   if(f=$('#pf'))f.onsubmit=function(e){e.preventDefault();api('GET','/api/cafes/'+c.id+'/payroll?from='+$('#pfr').value+'&to='+$('#pto').value).then(function(d){
     var tot=d.rows.reduce(function(a,x){return a+x.pay},0);$('#pr').innerHTML='<div class="card"><table><tr><th>Name</th><th>Hours</th><th>Rate</th><th>Pay</th></tr>'+d.rows.map(function(x){return '<tr><td>'+esc(x.name)+'</td><td>'+x.hours+'</td><td>'+money(x.hourly_rate)+'</td><td>'+money(x.pay)+'</td></tr>'}).join('')+'<tr><td colspan="3"><b>Total</b></td><td><b>'+money(tot)+'</b></td></tr></table></div>'}).catch(function(x){toast(x.message)})};
+  if($('#artpv')){
+    art=c.brand.art||null;paintArt();
+    $('#artbtn').onclick=function(){$('#artf').click()};
+    $('#artrm').onclick=function(){art=null;paintArt()};
+    $('#artf').onchange=function(){var f=this.files&&this.files[0];if(!f)return;pixelate(f,function(a){art=a;paintArt()},function(){toast('Could not read that image')})};
+  }
   if(f=$('#ef'))f.onsubmit=function(e){e.preventDefault();var er=$('#eer');er.hidden=true;
-    api('PATCH','/api/cafes/'+c.id,{name:$('#en').value.trim(),area:$('#ea').value.trim()||null,opens:$('#eo').value||null,closes:$('#ec').value||null,reward_text:$('#er').value.trim(),stamp_goal:+$('#eg').value||8,brand:{bg:$('#b1').value,ink:$('#b2').value,acc:$('#b3').value,pattern:$('#pt').value}}).then(function(){refresh('Saved')}).catch(function(x){er.textContent=x.message;er.hidden=false})};
+    api('PATCH','/api/cafes/'+c.id,{name:$('#en').value.trim(),area:$('#ea').value.trim()||null,opens:$('#eo').value||null,closes:$('#ec').value||null,reward_text:$('#er').value.trim(),stamp_goal:+$('#eg').value||8,brand:Object.assign({bg:$('#b1').value,ink:$('#b2').value,acc:$('#b3').value,pattern:$('#pt').value},art?{art:art}:{})}).then(function(){refresh('Saved')}).catch(function(x){er.textContent=x.message;er.hidden=false})};
 }
 function addForm(){return '<form id="af" class="card"><label for="n">Name</label><input id="n" maxlength="80"><div class="row"><div><label for="k">Type</label><select id="k"><option value="cafe">Cafe</option><option value="restaurant">Restaurant</option></select></div><div><label for="g">Stamps for a reward</label><input id="g" type="number" min="1" max="20" value="8"></div></div>'+
   '<div class="row"><div><label for="a">Area</label><input id="a" maxlength="60"></div><div><label for="c">City</label><input id="c" maxlength="60" value="Mysuru"></div></div><div class="row"><div><label for="la">Latitude</label><input id="la" inputmode="decimal"></div><div><label for="lo">Longitude</label><input id="lo" inputmode="decimal"></div></div>'+
@@ -57,3 +63,35 @@ function bindAdd(){
 }
 function newCafe(){sheet('<h2 style="margin-top:0">Add another cafe</h2>'+addForm());bindAdd()}
 setInterval(function(){if(D&&tab==='overview'&&!$('#scrim')&&!document.hidden)refresh()},20000);
+
+/* Card design: a picture is cropped to the card shape, shrunk to a 56 x 34 grid and reduced to 12 colours, so it looks like pixel art. */
+var art=null;
+function paintArt(){
+  var cv=$('#artpv');if(!cv)return;var x=cv.getContext('2d');x.imageSmoothingEnabled=false;x.clearRect(0,0,cv.width,cv.height);
+  $('#artrm').hidden=!art;$('#artbtn').textContent=art?'Change design':'Upload design';
+  if(!art){x.fillStyle=getComputedStyle(document.body).color;x.globalAlpha=.35;x.font='600 18px sans-serif';x.textAlign='center';x.fillText('No design yet',cv.width/2,cv.height/2);x.globalAlpha=1;return}
+  var sx=cv.width/art.w,sy=cv.height/art.h;
+  for(var i=0;i<art.d.length;i++){x.fillStyle=art.p[parseInt(art.d.charAt(i),16)];x.fillRect((i%art.w)*sx,Math.floor(i/art.w)*sy,Math.ceil(sx),Math.ceil(sy))}
+}
+function pixelate(file,ok,fail){
+  var url=URL.createObjectURL(file),img=new Image();
+  img.onerror=function(){URL.revokeObjectURL(url);fail()};
+  img.onload=function(){
+    var W=56,H=34,cv=document.createElement('canvas');cv.width=W;cv.height=H;var x=cv.getContext('2d',{willReadFrequently:true});
+    x.fillStyle='#ffffff';x.fillRect(0,0,W,H);x.imageSmoothingQuality='high';
+    var k=Math.max(W/img.width,H/img.height),sw=W/k,sh=H/k;x.drawImage(img,(img.width-sw)/2,(img.height-sh)/2,sw,sh,0,0,W,H);URL.revokeObjectURL(url);
+    var d=x.getImageData(0,0,W,H).data,n=W*H,px=[],i,j;
+    for(i=0;i<n;i++)px.push([d[i*4],d[i*4+1],d[i*4+2]]);
+    var K=12,cs=px.slice().sort(function(a,b){return (a[0]+a[1]+a[2])-(b[0]+b[1]+b[2])}),cen=[];
+    for(i=0;i<K;i++)cen.push(cs[Math.floor((i+.5)*n/K)].slice());
+    var as=new Array(n).fill(0);
+    for(var it=0;it<8;it++){
+      var sum=cen.map(function(){return [0,0,0,0]});
+      for(i=0;i<n;i++){var bi=0,bd=1e9;for(j=0;j<K;j++){var dr=px[i][0]-cen[j][0],dg=px[i][1]-cen[j][1],db=px[i][2]-cen[j][2],dd=dr*dr+dg*dg+db*db;if(dd<bd){bd=dd;bi=j}}as[i]=bi;sum[bi][0]+=px[i][0];sum[bi][1]+=px[i][1];sum[bi][2]+=px[i][2];sum[bi][3]++}
+      for(j=0;j<K;j++)if(sum[j][3])cen[j]=[sum[j][0]/sum[j][3],sum[j][1]/sum[j][3],sum[j][2]/sum[j][3]];
+    }
+    var hx=function(v){return ('0'+Math.round(v).toString(16)).slice(-2)};
+    ok({w:W,h:H,p:cen.map(function(c){return '#'+hx(c[0])+hx(c[1])+hx(c[2])}),d:as.map(function(v){return v.toString(16)}).join('')});
+  };
+  img.src=url;
+}

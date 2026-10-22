@@ -293,6 +293,15 @@ async function readImage(req: Request): Promise<{ bytes: ArrayBuffer; ext: strin
   return { bytes, ext, type };
 }
 
+/** A pixel design for the card: a small grid (up to 64 x 40) and up to 16 colours. d has one character (0-9, a-f) per pixel. */
+function cleanArt(a: unknown) {
+  const o = a as Record<string, unknown>;
+  const w = Number(o?.w), h = Number(o?.h), p = o?.p, d = o?.d;
+  if (!Number.isInteger(w) || !Number.isInteger(h) || w < 4 || h < 4 || w > 64 || h > 40) throw new HttpError(400, 'Card design size is not valid.');
+  if (!Array.isArray(p) || p.length < 1 || p.length > 16 || !p.every((c) => typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c))) throw new HttpError(400, 'Card design colours are not valid.');
+  if (typeof d !== 'string' || d.length !== w * h || !new RegExp(`^[0-${p.length > 10 ? '9a-' + (p.length - 1).toString(16) : p.length - 1}]+$`).test(d)) throw new HttpError(400, 'Card design pixels are not valid.');
+  return { w, h, p, d };
+}
 function cleanBrand(b: unknown): string {
   if (!b || typeof b !== 'object') throw new HttpError(400, 'brand must be an object.');
   const o = b as Record<string, unknown>;
@@ -302,7 +311,9 @@ function cleanBrand(b: unknown): string {
   };
   const pattern = String(o.pattern ?? 'dots');
   if (!PATTERNS.includes(pattern)) throw new HttpError(400, `brand.pattern must be one of ${PATTERNS.join(', ')}.`);
-  return JSON.stringify({ bg: hex(o.bg, 'bg'), ink: hex(o.ink, 'ink'), acc: hex(o.acc, 'acc'), pattern });
+  const out: Record<string, unknown> = { bg: hex(o.bg, 'bg'), ink: hex(o.ink, 'ink'), acc: hex(o.acc, 'acc'), pattern };
+  if (o.art) out.art = cleanArt(o.art);
+  return JSON.stringify(out);
 }
 
 // ---------- routes ----------

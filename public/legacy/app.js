@@ -9,6 +9,7 @@ var ORG = null;
 var registry = {}, nearIds = {}, walletOrder = [];
 
 /* ---------- small helpers ---------- */
+var _h={};function setHTML(id,html){var el=$(id);if(_h[id]===html&&el.firstChild)return false;_h[id]=html;el.innerHTML=html;return true}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 /* Only real image data or our own media path may go in an img src. Anything else is dropped. */
 function safeImg(u){u=String(u||'');return (/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+\/=]+$/.test(u)||/^\/api\/media\/[\w\/.-]+$/.test(u))?u:''}
@@ -19,7 +20,17 @@ function greet(){var h=new Date().getHours();return h<12?'Good morning':h<17?'Go
 function fmt(m){return m<1000?(Math.max(10,Math.round(m/10)*10))+' m':(m/1000).toFixed(1)+' km'}
 function dots(n,goal){var h='';for(var i=0;i<goal;i++)h+='<span class="dot'+(i<n?' on':'')+'"></span>';return '<div class="dots" aria-label="'+n+' of '+goal+' stamps">'+h+'</div>'}
 function initials(n){return String(n).split(/\s+/).filter(function(w){return /^[A-Za-z0-9]/.test(w)}).slice(0,2).map(function(w){return w.charAt(0).toUpperCase()}).join('')}
-function bvars(b){return '--b-bg:'+b.bg+';--b-ink:'+b.ink+';--b-acc:'+b.acc}
+function bvars(b){return '--b-bg:'+b.bg+';--b-ink:'+b.ink+';--b-acc:'+b.acc+(b.art?';--b-art:url('+b.art+')':'')}
+/* A cafe's own pixel design (a small colour grid from the database) is drawn once into a tiny image and used as the card background. */
+var _art={};
+function artUrl(a){
+  if(!a||!(a.w>=4&&a.w<=64&&a.h>=4&&a.h<=40)||!Array.isArray(a.p)||a.p.length>16||typeof a.d!=='string'||a.d.length!==a.w*a.h)return '';
+  for(var i=0;i<a.p.length;i++)if(!/^#[0-9a-fA-F]{6}$/.test(a.p[i]))return '';
+  if(_art[a.d+a.p.join()])return _art[a.d+a.p.join()];
+  var c=document.createElement('canvas');c.width=a.w;c.height=a.h;var x=c.getContext('2d');
+  for(var j=0;j<a.d.length;j++){var k=parseInt(a.d.charAt(j),16);if(!(k<a.p.length))return '';x.fillStyle=a.p[k];x.fillRect(j%a.w,Math.floor(j/a.w),1,1)}
+  return _art[a.d+a.p.join()]=c.toDataURL('image/png');
+}
 function brandOf(c){return c.brand}
 var MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'], DAYS=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 function istNow(){return new Date(Date.now()+5.5*3600*1000)}
@@ -61,7 +72,8 @@ function upsertCafe(a){
   var c=registry[a.id]||{id:a.id,joined:false,stamps:0,mid:'',mem:'',optin:true,offers:[],rewards:0}, b=a.brand||{};
   c.name=a.name; c.area=a.area||a.city||''; c.city=a.city||''; c.kind=a.kind==='restaurant'?'Restaurant':'Cafe'; c.lat=a.lat; c.lng=a.lng;
   c.opens=a.opens; c.closes=a.closes; c.goal=a.stamp_goal||8; c.reward=a.reward_text||'Free reward'; c.photos=a.photos||[];
-  c.brand={bg:b.bg||'#0b0b0b',ink:b.ink||'#fafafa',acc:b.acc||'#d9a066',pat:b.pattern||'dots'};
+  c.brand={bg:b.bg||'#0b0b0b',ink:b.ink||'#fafafa',acc:b.acc||'#d9a066',pat:b.pattern||'dots',art:artUrl(b.art)};
+  if(c.brand.art)c.brand.pat='art';
   if(a.offers)c.offers=a.offers;
   if(ORG){var p=toXY(c.lat,c.lng);c.x=p.x;c.y=p.y}
   registry[c.id]=c; return c;
@@ -137,7 +149,8 @@ function loadSaved(){
   return api('GET','/api/saved-offers').then(function(d){state.saved={};d.ids.forEach(function(i){state.saved[i]=true});state.savedList=d.offers});
 }
 function loadAccount(){
-  return api('GET','/api/me').then(function(m){applyMe(m);return Promise.all([loadCards(),loadSaved()])}).then(function(){afterAccount()},function(e){
+  var cp=api('GET','/api/memberships'),sp=api('GET','/api/saved-offers'); cp.catch(function(){});sp.catch(function(){});
+  return api('GET','/api/me').then(function(m){applyMe(m);return Promise.all([cp.then(applyCards),sp.then(function(d){state.saved={};d.ids.forEach(function(i){state.saved[i]=true});state.savedList=d.offers})])}).then(function(){afterAccount()},function(e){
     if(e.status!==401){toast(e.message)} state.auth=false; afterAccount();
   });
 }
@@ -176,7 +189,7 @@ function renderHome(){
       s+='</div>';
     }
   }
-  $('#home').innerHTML=s;
+  setHTML('#home',s);
 }
 
 /* ---------- wallet ---------- */
@@ -196,7 +209,7 @@ function renderWallet(){
   s+='</div>';
   list.forEach(function(c,k){s+='<span class="snap" style="top:'+(k*WS.step)+'px"></span>'});
   s+='</div></div><p class="foot hint">Scroll to browse · tap the front card to show your QR</p>';
-  $('#wallet').innerHTML=s;
+  if(!setHTML('#wallet',s)){layoutWallet();return}
   var sc=$('#wscroll');
   sc.addEventListener('scroll',function(){state.wi=Math.round(sc.scrollTop/WS.step);if(!wraf)wraf=requestAnimationFrame(function(){wraf=0;updateWallet()})});
   layoutWallet();
@@ -285,6 +298,7 @@ function tileImg(tx,ty,dark){
   t.img.onload=function(){t.src=dark?darken(t.img):t.img;t.ok=true;invalidate()}; t.img.onerror=function(){t.err=true};
   t.img.src='https://tile.openstreetmap.org/'+TZ+'/'+k+'.png'; return t;
 }
+function prefetchTiles(){var tl=fromXY(you.x-400,you.y-500),br=fromXY(you.x+400,you.y+500),dk=isDark();for(var ty=latTile(tl.lat);ty<=latTile(br.lat);ty++)for(var tx=lngTile(tl.lng);tx<=lngTile(br.lng);tx++)tileImg(tx,ty,dk)}
 var NT=Math.pow(2,TZ);
 function tileLng(tx){return tx/NT*360-180}
 function tileLat(ty){var n=Math.PI-2*Math.PI*ty/NT;return 180/Math.PI*Math.atan(0.5*(Math.exp(n)-Math.exp(-n)))}
@@ -560,7 +574,7 @@ function onFix(pos,first){
   var p=toXY(la,ln); you.x=p.x; you.y=p.y; you.lat=la; you.lng=ln; you.acc=pos.coords.accuracy||0;
   state.pos={lat:la,lng:ln};
   if(first){cam.x=you.x;cam.y=you.y}
-  lookupPlace();
+  lookupPlace(); if(first)prefetchTiles();
   if(state.nearLoaded&&(!state.nearAt||hav(state.nearAt.lat,state.nearAt.lng,la,ln)>1500))loadNearby();
   geoCheck(); invalidate(); if(state.tab==='home'&&state.nearLoaded)renderHome();
 }
@@ -686,7 +700,7 @@ function renderProfile(){
   s+='<h3 class="gh">Help</h3><div class="grp">'+navRow('Help centre','','data-act="go" data-href="/help.html"')+navRow('Contact support','','data-act="support"')+navRow('Terms and privacy policy','','data-act="legal"')+'</div>';
   if(state.admin)s+='<h3 class="gh">Admin</h3><div class="grp">'+navRow('Open Niro Admin','','data-act="go" data-href="https://admin.niro.cards"')+'</div>';
   s+='<button class="logout" data-act="logout">Log out</button><p class="foot" style="text-align:center">Niro</p>';
-  $('#profile').innerHTML=s;
+  setHTML('#profile',s);
 }
 var edP='', edPDirty=false, edD=[];
 function pd(s){var p=s.split('-');return new Date(+p[0],+p[1]-1,+p[2])}

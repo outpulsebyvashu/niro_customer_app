@@ -26,7 +26,8 @@ head = """<!doctype html>
 <link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <title>Niro</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=DM+Sans:wght@400;500;600;700&display=swap">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="preconnect" href="https://tile.openstreetmap.org">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=DM+Sans:wght@400;500;600;700&display=swap" media="print" onload="this.media='all'"><noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=DM+Sans:wght@400;500;600;700&display=swap"></noscript>
 <style>html,body{margin:0}[hidden]{display:none!important}
 """
 html = head + css + "\n</style>\n</head>\n<body>\n" + markup + '\n<script src="/qr.js"></script>\n<script src="/gate.js"></script>\n<script src="/app.js"></script>\n</body>\n</html>\n'
