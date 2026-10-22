@@ -2,11 +2,14 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Cafe Loyalty',
+  title: 'Niro',
   description: 'One loyalty card for your favourite cafes.',
   manifest: '/manifest.webmanifest',
-  icons: { icon: '/icons/icon-192.png', apple: '/icons/apple-touch-icon.png' },
-  appleWebApp: { capable: true, title: 'Cafe Loyalty', statusBarStyle: 'default' },
+  icons: {
+    icon: [{ url: '/favicon.svg', type: 'image/svg+xml' }, { url: '/favicon.ico', sizes: 'any' }],
+    apple: '/icons/apple-touch-icon.png',
+  },
+  appleWebApp: { capable: true, title: 'Niro', statusBarStyle: 'default' },
 };
 
 export const viewport: Viewport = {

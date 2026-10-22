@@ -4,7 +4,7 @@ Loyalty cards for partner cafes. Customers collect stamps; a popup shows when th
 Stack: Next.js (App Router, TypeScript), Cloudflare Worker + D1 + R2 in `worker/`.
 
 ## The design is approved. Do not change how it looks.
-`docs/customer-mock.html` is the reference. Open it in a browser to see the flow.
+`docs/customer-mock.html` is the reference. Brand assets (logo, favicon, app icons) are in `brand/`. Open it in a browser to see the flow.
 Today `app/globals.css`, `app/markup.ts` and `public/legacy/app.js` are that mock moved over unchanged.
 
 ## Rules for the Next.js move
