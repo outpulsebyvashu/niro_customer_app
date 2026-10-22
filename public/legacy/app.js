@@ -407,24 +407,27 @@ function pulse(){
   if(reduced())return; var c=avaCenter(), d=document.createElement('div');
   d.style.cssText='position:fixed;left:'+(c.x-c.w/2)+'px;top:'+(c.y-c.h/2)+'px;width:'+c.w+'px;height:'+c.h+'px;border-radius:18px;border:2px solid var(--ink);pointer-events:none;z-index:60';
   document.body.appendChild(d);
-  var a=d.animate([{transform:'scale(1)',opacity:.55},{transform:'scale(2.8)',opacity:0}],{duration:560,easing:'cubic-bezier(.2,.7,.2,1)'});
+  var a=d.animate([{transform:'scale(1)',opacity:.55},{transform:'scale(2.8)',opacity:0}],{duration:800,easing:'cubic-bezier(.2,.7,.2,1)'});
   a.onfinish=function(){d.remove()};
 }
-function circ(sc,c,r){var b=sc.getBoundingClientRect();return 'circle('+r+'px at '+(c.x-b.left)+'px '+(c.y-b.top)+'px)'}
+function origin(sc,c){var b=sc.getBoundingClientRect();return (c.x-b.left)+'px '+(c.y-b.top)+'px'}
 function setTab(t){
   if(tabBusy)return;
-  var from=state.tab, sc=$('#profile-screen'), R=Math.hypot(innerWidth,innerHeight)+40;
+  var from=state.tab, sc=$('#profile-screen');
   if(reduced()||t===from){setTab0(t);return}
+  /* only transform and opacity animate, so it runs on the GPU and stays smooth */
+  sc.style.willChange='transform,opacity';
   if(from==='profile'){
-    var c=avaCenter(); pulse(); tabBusy=true;
-    var a=sc.animate({clipPath:[circ(sc,c,R),circ(sc,c,0)],opacity:[1,.6]},{duration:380,easing:'cubic-bezier(.5,0,.7,.3)',fill:'forwards'});
-    a.onfinish=function(){tabBusy=false;setTab0(t);a.cancel()};
+    var c=avaCenter(); pulse(); tabBusy=true; sc.style.transformOrigin=origin(sc,c);
+    var a=sc.animate([{transform:'scale(1)',opacity:1},{transform:'scale(.82)',opacity:0}],{duration:620,easing:'cubic-bezier(.4,0,.2,1)',fill:'forwards'});
+    a.onfinish=function(){tabBusy=false;setTab0(t);a.cancel();sc.style.willChange=''};
     return;
   }
   setTab0(t);
   if(t==='profile'){
-    var c2=avaCenter(); pulse();
-    sc.animate({clipPath:[circ(sc,c2,0),circ(sc,c2,R)],opacity:[.6,1]},{duration:560,easing:'cubic-bezier(.25,.8,.25,1)'});
+    var c2=avaCenter(); pulse(); sc.style.transformOrigin=origin(sc,c2);
+    var an=sc.animate([{transform:'scale(.82)',opacity:0},{transform:'scale(1)',opacity:1}],{duration:850,easing:'cubic-bezier(.22,1,.36,1)'});
+    an.onfinish=function(){sc.style.willChange=''};
   }
 }
 function setTab0(t){
