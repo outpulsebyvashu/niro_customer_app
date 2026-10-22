@@ -5,10 +5,10 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "db:migrate:local": "wrangler d1 migrations apply cafe-loyalty --local",
-    "db:migrate": "wrangler d1 migrations apply cafe-loyalty --remote",
-    "db:seed:local": "wrangler d1 execute cafe-loyalty --local --file=seed.sql",
-    "db:seed": "wrangler d1 execute cafe-loyalty --remote --file=seed.sql",
+    "db:migrate:local": "wrangler d1 migrations apply niro-customer --local",
+    "db:migrate": "wrangler d1 migrations apply niro-customer --remote",
+    "db:seed:local": "wrangler d1 execute niro-customer --local --file=seed.sql",
+    "db:seed": "wrangler d1 execute niro-customer --remote --file=seed.sql",
     "typecheck": "tsc --noEmit",
     "test:api": "node --experimental-transform-types --no-warnings test/api.test.mjs"
   },

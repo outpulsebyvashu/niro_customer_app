@@ -5,8 +5,8 @@ cd worker
 npm install
 npx wrangler login
 
-npx wrangler d1 create cafe-loyalty          # copy the printed database_id into wrangler.jsonc
-npx wrangler r2 bucket create cafe-loyalty-media
+npx wrangler d1 create niro-customer          # copy the printed database_id into wrangler.jsonc
+npx wrangler r2 bucket create niro-customer-media
 
 npm run db:migrate                           # creates the tables
 npm run db:seed                              # optional: five sample Mysuru cafes (replace the placeholder coordinates)

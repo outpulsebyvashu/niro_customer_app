@@ -3,18 +3,18 @@
   "name": "niro-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
-  // D1 = SQL database. After `wrangler d1 create cafe-loyalty`, paste the printed database_id here.
+  // D1 = SQL database. After `wrangler d1 create niro-customer`, paste the printed database_id here.
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "cafe-loyalty",
+      "database_name": "niro-customer",
       "database_id": "REPLACE_WITH_YOUR_D1_ID",
       "migrations_dir": "migrations"
     }
   ],
   // R2 = file storage for profile photos and cafe photos.
   "r2_buckets": [
-    { "binding": "MEDIA", "bucket_name": "cafe-loyalty-media" }
+    { "binding": "MEDIA", "bucket_name": "niro-customer-media" }
   ],
   "observability": { "enabled": true },
   "vars": {
