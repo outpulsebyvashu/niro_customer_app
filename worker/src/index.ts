@@ -10,7 +10,7 @@
 
 export interface Env {
   DB: D1Database;
-  MEDIA: R2Bucket;
+  MEDIA?: R2Bucket;        // photo storage (R2). Optional: without it, photo features answer 503 and everything else works
   ASSETS?: Fetcher;       // not used when the app is hosted separately
   DEV_OTP?: string;        // "1" = skip SMS, every code is 123456 (testing only)
   TWILIO_SID?: string;     // secrets: wrangler secret put TWILIO_SID, etc.
@@ -35,6 +35,11 @@ const IMAGE_TYPES: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 
 const PATTERNS = ['dots', 'stripes', 'rings', 'grid'];
 
 // ---------- small helpers ----------
+function media(env: Env): R2Bucket {
+  if (!env.MEDIA) throw new HttpError(503, 'Photo storage is not set up yet.');
+  return env.MEDIA;
+}
+
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers } });
 
@@ -310,15 +315,15 @@ route('PUT', '/api/me/photo', async ({ req, env }) => {
   const u = await requireUser(req, env);
   const img = await readImage(req);
   const key = `avatars/${u.id}/${Date.now()}.${img.ext}`;
-  await env.MEDIA.put(key, img.bytes, { httpMetadata: { contentType: img.type } });
+  await media(env).put(key, img.bytes, { httpMetadata: { contentType: img.type } });
   await env.DB.prepare(`update users set photo_key = ? where id = ?`).bind(key, u.id).run();
-  if (u.photo_key) await env.MEDIA.delete(u.photo_key);
+  if (u.photo_key && env.MEDIA) await env.MEDIA.delete(u.photo_key);
   return json({ photo_url: `/api/media/${key}` });
 });
 
 route('DELETE', '/api/me/photo', async ({ req, env }) => {
   const u = await requireUser(req, env);
-  if (u.photo_key) await env.MEDIA.delete(u.photo_key);
+  if (u.photo_key && env.MEDIA) await env.MEDIA.delete(u.photo_key);
   await env.DB.prepare(`update users set photo_key = null where id = ?`).bind(u.id).run();
   return json({ ok: true });
 });
@@ -326,7 +331,7 @@ route('DELETE', '/api/me/photo', async ({ req, env }) => {
 // Delete my account and everything attached to it.
 route('DELETE', '/api/me', async ({ req, env }) => {
   const u = await requireUser(req, env);
-  if (u.photo_key) await env.MEDIA.delete(u.photo_key);
+  if (u.photo_key && env.MEDIA) await env.MEDIA.delete(u.photo_key);
   await env.DB.prepare(`delete from users where id = ?`).bind(u.id).run(); // cascades to cards, sessions, dates
   return json({ ok: true }, 200, { 'set-cookie': 'cl_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0' });
 });
@@ -341,7 +346,7 @@ route('GET', '/api/media/*key', async ({ req, env, p }) => {
     if (key.split('/')[1] !== u.id) throw new HttpError(403, 'Not allowed.');
     cache = 'private, max-age=3600';
   } else if (!key.startsWith('cafe-media/')) throw new HttpError(404, 'Not found.');
-  const obj = await env.MEDIA.get(key);
+  const obj = await media(env).get(key);
   if (!obj) throw new HttpError(404, 'Not found.');
   return new Response(obj.body, { headers: { 'content-type': obj.httpMetadata?.contentType ?? 'application/octet-stream', 'cache-control': cache, etag: obj.httpEtag } });
 });
@@ -559,7 +564,7 @@ route('POST', '/api/cafes/:id/photos', async ({ req, env, p }) => {
   if (keys.length >= 8) throw new HttpError(400, 'A cafe can have up to 8 photos.');
   const img = await readImage(req);
   const key = `cafe-media/${p.id}/${Date.now()}.${img.ext}`;
-  await env.MEDIA.put(key, img.bytes, { httpMetadata: { contentType: img.type } });
+  await media(env).put(key, img.bytes, { httpMetadata: { contentType: img.type } });
   keys.push(key);
   await env.DB.prepare(`update cafes set photo_keys = ? where id = ?`).bind(JSON.stringify(keys), p.id).run();
   return json({ url: `/api/media/${key}` }, 201);

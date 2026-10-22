@@ -12,10 +12,8 @@
       "migrations_dir": "migrations"
     }
   ],
-  // R2 = file storage for profile photos and cafe photos.
-  "r2_buckets": [
-    { "binding": "MEDIA", "bucket_name": "niro-customer-media" }
-  ],
+  // R2 (photo storage) is switched off for now. To turn it on later, create the bucket and add:
+  // "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "niro-customer-media" }],
   "observability": { "enabled": true },
   "vars": {
     // "1" = no SMS is sent and every OTP is 123456. Use only while testing. Remove for production.

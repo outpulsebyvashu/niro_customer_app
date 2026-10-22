@@ -34,7 +34,7 @@ comparing it with `docs/customer-mock.html` after each, then delete the matching
   built out; Vercel is the quickest for now.
 
 ## Deploy the API (Cloudflare)
-See `worker/README.md`. Database name `niro-customer`, R2 bucket `niro-customer-media`.
+See `worker/README.md`. Database name `niro-customer`. R2 (photos) is optional and switched off for now.
 The app is not yet connected to the API; it still uses sample data.
 
 ## Install on a phone
@@ -44,4 +44,4 @@ iPhone Safari: Share > Add to Home Screen. After changing files, bump `VERSION` 
 ## Deploy without GitHub or a terminal (phone friendly)
 Build the Pages bundle (static app + `_worker.js`, the compiled `worker/src/index.ts`) and drag it into
 Cloudflare Pages > Upload assets. Then add the bindings in the Pages project settings:
-D1 database `DB` = `niro-customer`, R2 bucket `MEDIA` = `niro-customer-media`, and the variable `DEV_OTP` = `1` while testing.
+D1 database `DB` = `niro-customer` and the variable `DEV_OTP` = `1` while testing.
