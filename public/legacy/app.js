@@ -236,12 +236,17 @@ document.addEventListener('submit',function(e){
 });
 
 /* ---------- the map: real OpenStreetMap pictures under our own pins ---------- */
-var tiles={}, tileN=0;
-function tileImg(tx,ty){
+var tiles={}, tileN=0, tileDark=null;
+function darken(img){
+  var c=document.createElement('canvas'); c.width=c.height=256; var x=c.getContext('2d');
+  x.filter='invert(1) hue-rotate(180deg) brightness(.9) contrast(.9)'; x.drawImage(img,0,0); return c;
+}
+function tileImg(tx,ty,dark){
+  if(tileDark!==dark){tileDark=dark;Object.keys(tiles).forEach(function(k){if(tiles[k].ok)tiles[k].src=dark?darken(tiles[k].img):tiles[k].img})}
   var k=tx+'/'+ty, t=tiles[k]; if(t)return t;
-  if(tileN>400){tiles={};tileN=0}
-  t=tiles[k]={ok:false,img:new Image()}; tileN++;
-  t.img.onload=function(){t.ok=true;invalidate()}; t.img.onerror=function(){t.err=true};
+  if(tileN>600){tiles={};tileN=0}
+  t=tiles[k]={ok:false,img:new Image(),src:null,g:null}; tileN++;
+  t.img.onload=function(){t.src=dark?darken(t.img):t.img;t.ok=true;invalidate()}; t.img.onerror=function(){t.err=true};
   t.img.src='https://tile.openstreetmap.org/'+TZ+'/'+k+'.png'; return t;
 }
 var NT=Math.pow(2,TZ);
@@ -253,7 +258,8 @@ function latTile(lat){var r=lat*Math.PI/180;return Math.floor((1-Math.log(Math.t
 var cv=$('#mapcv'), ctx=null, W=0, H=0, DPR=1, cam={x:0,y:0}, vel={x:0,y:0}, drag=null, fly=null, raf=0, hits=[];
 var ICON_C=new Path2D('M-6 -4h9v5a4.5 4.5 0 0 1-9 0zM3 -3h2a2.2 2.2 0 0 1 0 4.4H3');
 var ICON_R=new Path2D('M-4.5 -7v5a2.5 2.5 0 0 0 5 0v-5M-2 -7v14M6 7v-14c-3.2 2-3.2 7.5 0 9.5');
-function colors(){var s=getComputedStyle(document.documentElement);function g(n){return s.getPropertyValue(n).trim()}
+var _C=null,_CK='';function colors(){var k=document.documentElement.getAttribute('data-theme')+isDark();if(_C&&_CK===k)return _C;_CK=k;return _C=colors0()}
+function colors0(){var s=getComputedStyle(document.documentElement);function g(n){return s.getPropertyValue(n).trim()}
   return {land:g('--m-land'),ink:g('--ink'),bg:g('--bg'),you:g('--you')}}
 function isDark(){var t=document.documentElement.getAttribute('data-theme');return t?t==='dark':(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)}
 function matches(c){var q=state.q.trim().toLowerCase();return !q||(c.name+' '+c.area+' '+c.kind).toLowerCase().indexOf(q)>-1}
@@ -265,15 +271,14 @@ function draw(){
   ctx.setTransform(DPR,0,0,DPR,0,0);
   ctx.fillStyle=C.land; ctx.fillRect(0,0,W,H);
   if(ORG){
-    var tl=fromXY(l,t), br=fromXY(r,b), x0=lngTile(tl.lng), x1=lngTile(br.lng), y0=latTile(tl.lat), y1=latTile(br.lat), tx, ty;
+    var tl=fromXY(l-256,t-256), br=fromXY(r+256,b+256), x0=lngTile(tl.lng), x1=lngTile(br.lng), y0=latTile(tl.lat), y1=latTile(br.lat), tx, ty;
     if((x1-x0+1)*(y1-y0+1)<=80){
-      if(isDark())ctx.filter='invert(1) hue-rotate(180deg) brightness(.9) contrast(.9)';
+      var dk=isDark(); ctx.imageSmoothingEnabled=true;
       for(ty=y0;ty<=y1;ty++)for(tx=x0;tx<=x1;tx++){
-        var tt=tileImg(tx,ty); if(!tt.ok)continue;
-        var a=toXY(tileLat(ty),tileLng(tx)), z=toXY(tileLat(ty+1),tileLng(tx+1));
-        ctx.drawImage(tt.img,a.x-l-0.4,a.y-t-0.4,z.x-a.x+0.8,z.y-a.y+0.8);
+        var tt=tileImg(tx,ty,dk); if(!tt.ok)continue;
+        if(!tt.g||tt.g.o!==ORG){var a=toXY(tileLat(ty),tileLng(tx)), z=toXY(tileLat(ty+1),tileLng(tx+1));tt.g={o:ORG,x:a.x,y:a.y,w:z.x-a.x+0.8,h:z.y-a.y+0.8}}
+        ctx.drawImage(tt.src,tt.g.x-l-0.4,tt.g.y-t-0.4,tt.g.w,tt.g.h);
       }
-      ctx.filter='none';
     }
   }
   /* you are here */
@@ -311,7 +316,7 @@ function frame(now){
 function flyTo(x,y){fly={sx:cam.x,sy:cam.y,tx:x,ty:y,t0:performance.now(),dur:450};vel.x=vel.y=0;invalidate()}
 function resizeMap(){
   var r=cv.getBoundingClientRect(); if(!r.width)return;
-  DPR=window.devicePixelRatio||1; W=r.width; H=r.height; cv.width=Math.round(W*DPR); cv.height=Math.round(H*DPR); ctx=cv.getContext('2d'); invalidate();
+  DPR=Math.min(window.devicePixelRatio||1,2); W=r.width; H=r.height; cv.width=Math.round(W*DPR); cv.height=Math.round(H*DPR); ctx=cv.getContext('2d'); invalidate();
 }
 function tapAt(e){
   var r=cv.getBoundingClientRect(), px=e.clientX-r.left, py=e.clientY-r.top, best=null, bd=26;
