@@ -36,6 +36,11 @@ function renderHome(){
   near.forEach(function(c){
     s += '<button class="near" data-act="pin" data-id="'+c.id+'"><span class="pic">'+photo(c)+'<span class="badge'+(c.open?' open':'')+'"><i></i>'+(c.open?'Open':'Closed')+'</span></span><span class="nt"><b>'+c.name+'</b><span class="m">'+c.area+' · '+fmt(distOf(c))+'</span></span></button>';
   });
+  var sv=cafes.filter(function(c){return state.saved[c.id]});
+  s += '</div><h2 class="sec" id="saved" style="scroll-margin-top:96px">Saved offers'+(sv.length?' ('+sv.length+')':'')+'</h2><div class="offers">';
+  if(sv.length){sv.forEach(function(c){
+    s += '<div class="offer"><div><b>'+c.offer+'</b><small>'+c.name+' · '+c.exp+'</small></div><button class="chip" data-act="save" data-id="'+c.id+'" aria-pressed="true">Saved</button></div>';
+  })} else {s += '<div class="hero"><span class="k">Nothing saved yet</span><p>Tap Save on an offer below to keep it here.</p></div>'}
   s += '</div><h2 class="sec">Offers for you</h2><div class="offers">';
   cafes.forEach(function(c){
     s += '<div class="offer"><div><b>'+c.offer+'</b><small>'+c.name+' · '+c.exp+'</small></div><button class="chip" data-act="save" data-id="'+c.id+'" aria-pressed="'+(!!state.saved[c.id])+'">'+(state.saved[c.id]?'Saved':'Save')+'</button></div>';
@@ -393,7 +398,8 @@ document.addEventListener('click',function(e){
     if(act==='sheet')openSheet(id);
     else if(act==='close')closeSheet();
     else if(act==='pin')selectPlace(id);
-    else if(act==='save'){state.saved[id]=!state.saved[id];renderHome()}
+    else if(act==='save'){state.saved[id]=!state.saved[id];try{localStorage.setItem('cl-saved',JSON.stringify(state.saved))}catch(e){}renderHome();if(state.tab==='profile')renderProfile()}
+    else if(act==='savedgo'){setTab('home');setTimeout(function(){var e=$('#saved');if(e)e.scrollIntoView({behavior:'smooth',block:'start'})},80)}
     else if(act==='join')openJoin(id);
     else if(act==='route'){
       state.route=state.route===id?null:id; refreshMap();
@@ -515,6 +521,8 @@ function renderProfile(){
   s+='<div class="stats"><div><b>'+list.length+'</b><span>Cards</span></div><div><b>'+stamps+'</b><span>Stamps</span></div><div><b>'+ready+'</b><span>Rewards ready</span></div></div>';
   var sd=[]; if(m.birthday)sd.push({l:'Birthday',d:m.birthday}); (m.dates||[]).forEach(function(x){sd.push(x)});
   sd.forEach(function(x){x.n=inDays(x.d)}); sd.sort(function(a,b){return a.n-b.n});
+  var nsv=cafes.filter(function(c){return state.saved[c.id]}).length;
+  s+='<h3 class="gh">Offers</h3><div class="grp">'+navRow('Saved offers',nsv?String(nsv):'None yet','data-act="savedgo"')+'</div>';
   s+='<h3 class="gh">Special days</h3><div class="grp">'+(sd.length?sd.map(function(x){return '<div class="pr"><span class="pt">'+esc(x.l)+'<small>'+dm(x.d)+'</small></span><span class="pv">'+inTxt(x.n)+'</span></div>'}).join('')+navRow('Add or edit dates','','data-act="edit"'):navRow('Add your birthday and special dates','','data-act="edit"'))+
     swRow('Treats on special days','Cafes you joined may send you a treat',state.prefs.treats,'treats')+'</div>';
   var ab=[]; if(m.email)ab.push(['Email',m.email]); if(m.diet)ab.push(['Food preference',m.diet]); if(m.fav)ab.push(['Usual order',m.fav]);
@@ -696,6 +704,7 @@ function applyTheme(t){var r=document.documentElement;if(t==='system')r.removeAt
 function setTheme(t){state.theme=t;try{localStorage.setItem('cl-theme',t)}catch(err){}applyTheme(t);renderProfile();invalidate()}
 state.theme=getTheme(); if(state.theme!=='system')applyTheme(state.theme);
 
+try{var svd=JSON.parse(localStorage.getItem('cl-saved')||'{}');Object.keys(svd).forEach(function(k){if(registry[k]&&svd[k]===true)state.saved[k]=true})}catch(e){}
 renderHome(); renderWallet(); setTab('home'); detect();
 /* Keep the login and profile on this device, so a reload or reopen stays signed in. */
 function cleanMe(o){
