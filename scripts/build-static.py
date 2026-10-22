@@ -33,7 +33,7 @@ html = head + css + "\n</style>\n</head>\n<body>\n" + markup + '\n<script src="/
 wr('index.html', html)
 for src, dst in [('public/legacy/app.js', 'app.js'), ('public/legacy/gate.js', 'gate.js'), ('public/legacy/qr.js', 'qr.js'),
                  ('public/privacy.html', 'privacy.html'), ('public/terms.html', 'terms.html'), ('public/help.html', 'help.html'),
-                 ('public/admin.html', 'admin.html'), ('public/favicon.svg', 'favicon.svg'), ('public/manifest.webmanifest', 'manifest.webmanifest'), ('public/sw.js', 'sw.js')]:
+                 ('public/favicon.svg', 'favicon.svg'), ('public/manifest.webmanifest', 'manifest.webmanifest'), ('public/sw.js', 'sw.js')]:
     shutil.copy(src, os.path.join(out, dst))
 shutil.copy('public/favicon.ico', os.path.join(out, 'favicon.ico'))
 shutil.rmtree(os.path.join(out, 'icons'), ignore_errors=True); shutil.copytree('public/icons', os.path.join(out, 'icons'))

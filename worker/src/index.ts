@@ -937,6 +937,108 @@ route('GET', '/api/cafes/:id/payroll', async ({ req, env, p, url }) => {
   return json({ from, to, rows: r.results.map((x) => ({ ...x, pay: Math.round(x.hours * x.hourly_rate * 100) / 100 })) });
 });
 
+// --- partner app (partner.niro.cards): everything an owner or manager needs for their own cafes ---
+route('GET', '/api/partner/cafes', async ({ req, env }) => {
+  const u = await requireUser(req, env);
+  const mine = await env.DB.prepare(
+    `select c.id, c.name, c.kind, c.area, c.city, c.lat, c.lng, c.opens, c.closes, c.stamp_goal, c.reward_text, c.brand, c.is_active, s.role
+     from staff s join cafes c on c.id = s.cafe_id where s.user_id = ? and s.is_active = 1 and s.role in ('owner','manager') order by c.created_at`).bind(u.id).all<CafeRow & { role: string }>();
+  const out = [];
+  for (const c of mine.results) {
+    const st = await env.DB.prepare(
+      `select (select count(*) from memberships where cafe_id = ?1) as members,
+              (select coalesce(sum(qty), 0) from stamp_events where cafe_id = ?1 and kind = 'stamp' and created_at >= ?2) as stamps_today,
+              (select coalesce(sum(qty), 0) from stamp_events where cafe_id = ?1 and kind = 'stamp' and created_at >= ?3) as stamps_week,
+              (select count(*) from stamp_events where cafe_id = ?1 and kind = 'redeem') as rewards_redeemed`).bind(c.id, istDayStart(), new Date(Date.now() - 7 * 86400_000).toISOString()).first();
+    const offers = await env.DB.prepare(`select id, title, ends_at from offers where cafe_id = ? and is_active = 1 order by created_at desc`).bind(c.id).all();
+    const staff = await env.DB.prepare(
+      `select s.id, u.name, u.phone, s.role, s.hourly_rate, (select clock_in from shifts where staff_id = s.id and clock_out is null) as clocked_in_since
+       from staff s join users u on u.id = s.user_id where s.cafe_id = ? and s.is_active = 1 order by s.role, u.name`).bind(c.id).all();
+    out.push({ ...c, brand: JSON.parse(c.brand), stats: st, offers: offers.results, staff: staff.results });
+  }
+  return json({ cafes: out, me: { name: u.name, phone: u.phone } });
+});
+
+route('DELETE', '/api/cafes/:id/offers/:oid', async ({ req, env, p }) => {
+  const u = await requireUser(req, env);
+  await requireManager(env, u.id, p.id);
+  const r = await env.DB.prepare(`update offers set is_active = 0 where id = ? and cafe_id = ? and is_active = 1`).bind(p.oid, p.id).run();
+  if (!r.meta.changes) throw new HttpError(404, 'Offer not found.');
+  return json({ ok: true });
+});
+
+route('DELETE', '/api/cafes/:id/staff/:sid', async ({ req, env, p }) => {
+  const u = await requireUser(req, env);
+  const me = await requireManager(env, u.id, p.id);
+  const t = await env.DB.prepare(`select id, role from staff where id = ? and cafe_id = ? and is_active = 1`).bind(p.sid, p.id).first<{ id: string; role: string }>();
+  if (!t) throw new HttpError(404, 'Staff member not found.');
+  if (t.role === 'owner') throw new HttpError(403, 'The owner cannot be removed.');
+  if (t.role === 'manager' && me.role !== 'owner') throw new HttpError(403, 'Only the owner can remove a manager.');
+  await env.DB.batch([
+    env.DB.prepare(`update shifts set clock_out = ? where staff_id = ? and clock_out is null`).bind(now(), t.id),
+    env.DB.prepare(`update staff set is_active = 0 where id = ?`).bind(t.id),
+  ]);
+  return json({ ok: true });
+});
+
+// --- workforce app (workforce.niro.cards): look up a card before stamping, and see today's activity ---
+route('GET', '/api/staff/card', async ({ req, env, url }) => {
+  const u = await requireUser(req, env);
+  const m = await cardByCode(env, url.searchParams.get('code'));
+  await requireStaffForCard(env, u.id, m);
+  const r = await env.DB.prepare(
+    `select u.name, m.stamps, m.rewards_redeemed, c.name as cafe, c.stamp_goal, c.reward_text from memberships m join users u on u.id = m.user_id join cafes c on c.id = m.cafe_id where m.id = ?`)
+    .bind(m.id).first<{ name: string; stamps: number; rewards_redeemed: number; cafe: string; stamp_goal: number; reward_text: string }>();
+  return json({ ...r!, name: r!.name.split(/\s+/)[0] });
+});
+
+route('GET', '/api/staff/today', async ({ req, env, url }) => {
+  const u = await requireUser(req, env);
+  const cafeId = str(url.searchParams.get('cafe_id'), 64, 'cafe_id', true)!;
+  await requireStaff(env, u.id, cafeId);
+  const r = await env.DB.prepare(
+    `select e.kind, e.qty, e.created_at, cu.name as customer from stamp_events e join memberships m on m.id = e.membership_id join users cu on cu.id = m.user_id
+     where e.cafe_id = ? and e.staff_user_id = ? and e.created_at >= ? order by e.id desc limit 30`).bind(cafeId, u.id, istDayStart()).all<{ kind: string; qty: number; created_at: string; customer: string }>();
+  const sum = r.results.reduce((a, x) => a + (x.kind === 'stamp' ? x.qty : 0), 0);
+  return json({ stamps: sum, events: r.results.map((x) => ({ ...x, customer: x.customer.split(/\s+/)[0] })) });
+});
+
+// --- admin app (admin.niro.cards): whole-platform view ---
+route('GET', '/api/admin/overview', async ({ req, env }) => {
+  await requireAdmin(req, env);
+  const r = await env.DB.prepare(
+    `select (select count(*) from users) as users,
+            (select count(*) from cafes where is_active = 1) as cafes_live,
+            (select count(*) from cafes where is_active = 0) as cafes_pending,
+            (select count(*) from memberships) as cards,
+            (select coalesce(sum(qty), 0) from stamp_events where kind = 'stamp' and created_at >= ?1) as stamps_today,
+            (select count(*) from stamp_events where kind = 'redeem') as rewards_redeemed,
+            (select count(*) from support_messages where status = 'open') as support_open`).bind(istDayStart()).first();
+  return json(r);
+});
+
+route('GET', '/api/admin/support', async ({ req, env, url }) => {
+  await requireAdmin(req, env);
+  const status = url.searchParams.get('status') === 'closed' ? 'closed' : 'open';
+  const r = await env.DB.prepare(`select id, contact, message, status, created_at from support_messages where status = ? order by created_at desc limit 100`).bind(status).all();
+  return json({ messages: r.results });
+});
+
+route('PATCH', '/api/admin/support/:id', async ({ req, env, p }) => {
+  await requireAdmin(req, env);
+  const b = await body(req);
+  const r = await env.DB.prepare(`update support_messages set status = ? where id = ?`).bind(b.status === 'open' ? 'open' : 'closed', p.id).run();
+  if (!r.meta.changes) throw new HttpError(404, 'Message not found.');
+  return json({ ok: true });
+});
+
+route('DELETE', '/api/admin/cafes/:id', async ({ req, env, p }) => {
+  await requireAdmin(req, env);
+  const r = await env.DB.prepare(`delete from cafes where id = ? and is_active = 0`).bind(p.id).run();
+  if (!r.meta.changes) throw new HttpError(409, 'Only a hidden cafe can be deleted. Hide it first.');
+  return json({ ok: true });
+});
+
 // ---------- entry point ----------
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {

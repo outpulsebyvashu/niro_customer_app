@@ -270,7 +270,7 @@ assert.ok(guesses.filter((g) => g.status === 400).length <= 5); step('OTP guess 
   ok(await call('POST', '/api/support', { body: { message: 'I need help with my card', contact: 'a@b.co' } }), 201);
   ok(await call('POST', '/api/support', { token: u1, body: { message: 'Signed in message' } }), 201);
   assert.equal(sqlite.prepare('select count(*) n from support_messages').get().n, 2);
-  assert.equal(sqlite.prepare('select user_id from support_messages order by created_at desc limit 1').get().user_id != null, true);
+  assert.equal(sqlite.prepare('select count(*) n from support_messages where user_id is not null').get().n, 1);
   for (let i = 0; i < 3; i++) ok(await call('POST', '/api/support', { body: { message: 'message number ' + i, contact: 'x@y.co' } }), 201);
   assert.equal((await call('POST', '/api/support', { body: { message: 'one too many here', contact: 'x@y.co' } })).status, 429); step('support messages saved and rate limited');
   // reverse geocode (Nominatim stubbed)
@@ -302,6 +302,33 @@ assert.ok(guesses.filter((g) => g.status === 400).length <= 5); step('OTP guess 
   // pending cafes from owners stay hidden until admin approves
   const pend = sqlite.prepare(`select id from cafes where is_active = 0 and owner_id is not null limit 1`).get();
   if (pend) { ok(await call('PATCH', '/api/admin/cafes/' + pend.id, { token: adm, body: { is_active: true } })); step('admin approves an owner-created cafe'); }
+  // partner, workforce and admin apps
+  const pm = await login('9666666666', 'Pia');
+  const pc = ok(await call('GET', '/api/partner/cafes', { token: pm })).cafes; assert.equal(pc.length, 1); assert.equal(pc[0].id, made.id); assert.ok(pc[0].offers.length >= 2 && pc[0].staff.length === 1);
+  assert.equal((await call('GET', '/api/partner/cafes')).status, 401); step('partner: lists only my cafes with stats, offers and staff');
+  const off = ok(await call('POST', '/api/cafes/' + made.id + '/offers', { token: pm, body: { title: 'Extra' } }), 201);
+  ok(await call('DELETE', '/api/cafes/' + made.id + '/offers/' + off.id, { token: pm }));
+  assert.equal((await call('DELETE', '/api/cafes/' + made.id + '/offers/' + off.id, { token: pm })).status, 404); step('partner: offers can be added and removed');
+  const cust = await login('9777777777', 'Chitra Rao');
+  ok(await call('POST', '/api/cafes/' + made.id + '/join', { token: cust, body: {} }), 201);
+  const code = ok(await call('GET', '/api/memberships', { token: cust })).cards.find((x) => x.cafe.id === made.id).member_code;
+  const cd = ok(await call('GET', '/api/staff/card?code=' + code, { token: pm })); assert.equal(cd.name, 'Chitra'); assert.equal(cd.stamps, 0);
+  assert.equal((await call('GET', '/api/staff/card?code=' + code, { token: cust })).status, 404);
+  ok(await call('POST', '/api/staff/stamp', { token: pm, body: { code, qty: 2 } }));
+  const td = ok(await call('GET', '/api/staff/today?cafe_id=' + made.id, { token: pm })); assert.equal(td.stamps, 2); assert.equal(td.events[0].customer, 'Chitra');
+  assert.equal((await call('GET', '/api/staff/today?cafe_id=' + made.id, { token: cust })).status, 403); step('workforce: card lookup, stamp and today list');
+  ok(await call('POST', '/api/cafes/' + made.id + '/staff', { token: pm, body: { phone: '9888888888', role: 'staff' } }), 201);
+  const pc2 = ok(await call('GET', '/api/partner/cafes', { token: pm })).cafes[0]; const sid = pc2.staff.find((x) => x.role === 'staff').id;
+  ok(await call('DELETE', '/api/cafes/' + made.id + '/staff/' + sid, { token: pm }));
+  const ownerRow = pc2.staff.find((x) => x.role === 'manager');
+  assert.equal((await call('DELETE', '/api/cafes/' + made.id + '/staff/' + ownerRow.id, { token: pm })).status, 403); step('partner: remove staff; a manager cannot remove a manager');
+  const ov = ok(await call('GET', '/api/admin/overview', { token: adm })); assert.ok(ov.users > 3 && ov.cafes_live >= 1);
+  assert.equal((await call('GET', '/api/admin/overview', { token: pm })).status, 403);
+  sqlite.prepare('delete from support_messages').run();
+  ok(await call('POST', '/api/support', { body: { message: 'Hello from test', contact: 'a@b.co' } }), 201);
+  const sup = ok(await call('GET', '/api/admin/support', { token: adm })).messages; assert.ok(sup.length >= 1);
+  ok(await call('PATCH', '/api/admin/support/' + sup[0].id, { token: adm, body: { status: 'closed' } }));
+  assert.equal((await call('DELETE', '/api/admin/cafes/' + made.id, { token: adm })).status, 409); step('admin: overview, support inbox, delete needs hidden cafe');
 }
 // sample cafes are removed on a live database (SEED_SAMPLE not "1")
 {

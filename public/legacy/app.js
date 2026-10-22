@@ -649,7 +649,7 @@ function renderProfile(){
   s+='<h3 class="gh">Location</h3><div class="grp">'+navRow('Current location',esc(state.place&&(state.place.locality||state.place.city)||(you.lat!=null?'Near you':'Not available')),'data-act="loc"')+navRow('Nearby cafes',permLabel(),'data-act="loc"')+'</div>';
   s+='<h3 class="gh">Privacy</h3><div class="grp">'+navRow('Download my data','','data-act="download"')+navRow('Delete my data','','data-act="del"')+'</div>';
   s+='<h3 class="gh">Help</h3><div class="grp">'+navRow('Help centre','','data-act="go" data-href="/help.html"')+navRow('Contact support','','data-act="support"')+navRow('Terms and privacy policy','','data-act="legal"')+'</div>';
-  if(state.admin)s+='<h3 class="gh">Admin</h3><div class="grp">'+navRow('Manage cafes','','data-act="go" data-href="/admin.html"')+'</div>';
+  if(state.admin)s+='<h3 class="gh">Admin</h3><div class="grp">'+navRow('Open Niro Admin','','data-act="go" data-href="https://admin.niro.cards"')+'</div>';
   s+='<button class="logout" data-act="logout">Log out</button><p class="foot" style="text-align:center">Niro</p>';
   $('#profile').innerHTML=s;
 }
