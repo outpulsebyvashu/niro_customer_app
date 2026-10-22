@@ -1004,10 +1004,46 @@ route('GET', '/api/staff/today', async ({ req, env, url }) => {
 });
 
 // --- admin app (admin.niro.cards): whole-platform view ---
+// partner: the people who joined my cafe. Only the first name part, the last 4 digits of the number, and card activity.
+route('GET', '/api/cafes/:id/customers', async ({ req, env, p }) => {
+  const u = await requireUser(req, env);
+  await requireManager(env, u.id, p.id);
+  const r = await env.DB.prepare(
+    `select cu.name, substr(cu.phone, -4) as last4, m.stamps, m.rewards_redeemed, m.joined_at,
+       (select max(created_at) from stamp_events where membership_id = m.id) as last_visit
+     from memberships m join users cu on cu.id = m.user_id where m.cafe_id = ? order by coalesce(last_visit, m.joined_at) desc limit 500`).bind(p.id).all();
+  return json({ customers: r.results });
+});
+
+// admin: every user and what they are (customer, client = owner or manager, staff)
+route('GET', '/api/admin/users', async ({ req, env }) => {
+  await requireAdmin(req, env);
+  const r = await env.DB.prepare(
+    `select u.id, u.name, u.phone, u.email, u.created_at,
+       (select count(*) from memberships where user_id = u.id) as cards,
+       (select group_concat(c.name || ' (' || s.role || ')', ', ') from staff s join cafes c on c.id = s.cafe_id where s.user_id = u.id and s.is_active = 1) as jobs,
+       (select count(*) from staff where user_id = u.id and is_active = 1 and role in ('owner','manager')) as is_client,
+       (select count(*) from staff where user_id = u.id and is_active = 1 and role = 'staff') as is_staff
+     from users u order by u.created_at desc limit 1000`).all();
+  return json({ users: r.results });
+});
+
+route('GET', '/api/admin/staff', async ({ req, env }) => {
+  await requireAdmin(req, env);
+  const r = await env.DB.prepare(
+    `select s.id, u.name, u.phone, s.role, s.hourly_rate, c.name as cafe, (select clock_in from shifts where staff_id = s.id and clock_out is null) as clocked_in_since
+     from staff s join users u on u.id = s.user_id join cafes c on c.id = s.cafe_id where s.is_active = 1 order by c.name, s.role`).all();
+  return json({ staff: r.results });
+});
+
 route('GET', '/api/admin/overview', async ({ req, env }) => {
   await requireAdmin(req, env);
   const r = await env.DB.prepare(
     `select (select count(*) from users) as users,
+            (select count(distinct user_id) from staff where is_active = 1 and role in ('owner','manager')) as clients,
+            (select count(distinct user_id) from staff where is_active = 1 and role = 'staff') as staff,
+            (select count(distinct user_id) from memberships) as customers,
+            (select count(*) from staff s where s.is_active = 1 and exists (select 1 from shifts where staff_id = s.id and clock_out is null)) as working_now,
             (select count(*) from cafes where is_active = 1) as cafes_live,
             (select count(*) from cafes where is_active = 0) as cafes_pending,
             (select count(*) from memberships) as cards,

@@ -322,6 +322,10 @@ assert.ok(guesses.filter((g) => g.status === 400).length <= 5); step('OTP guess 
   ok(await call('DELETE', '/api/cafes/' + made.id + '/staff/' + sid, { token: pm }));
   const ownerRow = pc2.staff.find((x) => x.role === 'manager');
   assert.equal((await call('DELETE', '/api/cafes/' + made.id + '/staff/' + ownerRow.id, { token: pm })).status, 403); step('partner: remove staff; a manager cannot remove a manager');
+  const cs = ok(await call('GET', '/api/cafes/' + made.id + '/customers', { token: pm })).customers; assert.equal(cs[0].name, 'Chitra Rao'); assert.equal(cs[0].last4, '7777'); assert.ok(!('phone' in cs[0]));
+  assert.equal((await call('GET', '/api/cafes/' + made.id + '/customers', { token: cust })).status, 403); step('partner: customers show name and last 4 digits only');
+  const au = ok(await call('GET', '/api/admin/users', { token: adm })).users; assert.ok(au.find((x) => x.phone.endsWith('9666666666') && x.is_client === 1) && au.find((x) => x.name === 'Chitra Rao' && x.cards === 1));
+  assert.ok(ok(await call('GET', '/api/admin/staff', { token: adm })).staff.length >= 1); assert.equal((await call('GET', '/api/admin/users', { token: pm })).status, 403); step('admin: users and staff lists');
   const ov = ok(await call('GET', '/api/admin/overview', { token: adm })); assert.ok(ov.users > 3 && ov.cafes_live >= 1);
   assert.equal((await call('GET', '/api/admin/overview', { token: pm })).status, 403);
   sqlite.prepare('delete from support_messages').run();

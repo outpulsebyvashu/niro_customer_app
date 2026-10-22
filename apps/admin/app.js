@@ -1,16 +1,19 @@
 /* Niro Admin: the whole platform. Approve cafes, add cafes, read support messages. Only numbers in ADMIN_PHONES can use it. */
-var root=$('#root'), OV=null, CAFES=[], MSGS=[], tab='cafes', sup='open';
+var root=$('#root'), OV=null, CAFES=[], MSGS=[], tab='overview', sup='open', USERS=[], STAFF=[], uf='all', uq='';
 boot(root,{title:'Niro Admin',sub:'Platform admin. Only approved admin numbers can sign in.',
   load:function(){return Promise.all([api('GET','/api/admin/overview'),api('GET','/api/admin/cafes'),api('GET','/api/admin/support?status='+sup)])},
   render:function(r){OV=r[0];CAFES=r[1].cafes;MSGS=r[2].messages;draw()}});
 function reload(msg){return Promise.all([api('GET','/api/admin/overview'),api('GET','/api/admin/cafes'),api('GET','/api/admin/support?status='+sup)]).then(function(r){OV=r[0];CAFES=r[1].cafes;MSGS=r[2].messages;draw();if(msg)toast(msg)}).catch(function(e){toast(e.message)})}
 function draw(){
   var h='<div class="top"><div class="brandmark">niro <small>admin</small></div><button class="s sm" id="out">Log out</button></div>';
-  h+='<div class="stats">'+[[OV.users,'Users'],[OV.cafes_live,'Cafes live'],[OV.cafes_pending,'Waiting approval'],[OV.cards,'Loyalty cards'],[OV.stamps_today,'Stamps today'],[OV.rewards_redeemed,'Rewards given']].map(function(s){return '<div class="stat"><b>'+s[0]+'</b><span>'+s[1]+'</span></div>'}).join('')+'</div>';
-  h+='<div class="tabs" id="tabs" style="margin-top:16px">'+[['cafes','Cafes'],['add','Add cafe'],['support','Support'+(OV.support_open?' ('+OV.support_open+')':'')]].map(function(t){return '<button data-t="'+t[0]+'" aria-current="'+(tab===t[0])+'">'+t[1]+'</button>'}).join('')+'</div><div id="body">'+body()+'</div>';
-  root.innerHTML=h;$('#out').onclick=logout;$('#tabs').onclick=function(e){var b=e.target.closest('button');if(b){tab=b.dataset.t;draw()}};bind();
+    h+='<div class="tabs" id="tabs">'+[['overview','Overview'],['users','Users'],['staff','Staff'],['cafes','Cafes'],['add','Add cafe'],['support','Support'+(OV.support_open?' ('+OV.support_open+')':'')]].map(function(t){return '<button data-t="'+t[0]+'" aria-current="'+(tab===t[0])+'">'+t[1]+'</button>'}).join('')+'</div><div id="body">'+body()+'</div>';
+  root.innerHTML=h;$('#out').onclick=logout;$('#tabs').onclick=function(e){var b=e.target.closest('button');if(!b)return;tab=b.dataset.t;if(tab==='users'||tab==='staff')loadLists().then(draw);else draw()};bind();
 }
 function body(){
+  if(tab==='overview')return '<div class="stats">'+[[OV.users,'All users'],[OV.customers,'Customers'],[OV.clients,'Clients (owners)'],[OV.staff,'Staff'],[OV.working_now,'Working now'],[OV.cafes_live,'Cafes live'],[OV.cafes_pending,'Waiting approval'],[OV.cards,'Loyalty cards'],[OV.stamps_today,'Stamps today'],[OV.rewards_redeemed,'Rewards given'],[OV.support_open,'Open support']].map(function(s){return '<div class="stat"><b>'+s[0]+'</b><span>'+s[1]+'</span></div>'}).join('')+'</div>'+(OV.cafes_pending?'<div class="card" style="margin-top:14px"><b>'+OV.cafes_pending+' cafe'+(OV.cafes_pending>1?'s':'')+' waiting for approval</b><div class="acts"><button class="sm" data-go="cafes">Review</button></div></div>':'');
+  if(tab==='users'){var list=USERS.filter(function(x){return (uf==='all'||(uf==='customers'&&x.cards>0)||(uf==='clients'&&x.is_client>0)||(uf==='staff'&&x.is_staff>0))&&(!uq||(x.name+' '+x.phone).toLowerCase().indexOf(uq)>-1)});
+    return '<input id="uq" placeholder="Search name or number" value="'+esc(uq)+'" style="margin-bottom:10px"><div class="tabs">'+[['all','All'],['customers','Customers'],['clients','Clients'],['staff','Staff']].map(function(t){return '<button data-f="'+t[0]+'" aria-current="'+(uf===t[0])+'">'+t[1]+'</button>'}).join('')+'</div><div class="card"><p class="mut" style="margin:0 0 4px">'+list.length+' of '+USERS.length+'</p>'+list.map(function(x){return '<div class="li" style="align-items:flex-start"><span><b>'+esc(x.name||'No name')+'</b><small>'+esc(x.phone)+(x.email?' · '+esc(x.email):'')+'</small><small>Joined '+new Date(x.created_at).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'})+(x.jobs?' · '+esc(x.jobs):'')+'</small></span><span class="mut">'+x.cards+' card'+(x.cards===1?'':'s')+'</span></div>'}).join('')+'</div>'}
+  if(tab==='staff')return '<div class="card">'+(STAFF.length?STAFF.map(function(x){return '<div class="li"><span><b>'+esc(x.name||'No name')+'</b><span class="pill'+(x.clocked_in_since?' on':'')+'">'+(x.clocked_in_since?'Working':esc(x.role))+'</span><small>'+esc(x.phone)+' · '+esc(x.cafe)+' · '+esc(x.role)+' · '+money(x.hourly_rate)+'/hr</small></span></div>'}).join(''):'<p class="mut" style="margin:0">No staff yet.</p>')+'</div>';
   if(tab==='cafes'){var pend=CAFES.filter(function(c){return !c.is_active}),live=CAFES.filter(function(c){return c.is_active});
     function row(c){return '<div class="li" data-id="'+esc(c.id)+'"><span><b>'+esc(c.name)+'</b><span class="pill'+(c.is_active?' on':'')+'">'+(c.is_active?'Live':'Hidden')+'</span><small>'+esc(c.kind)+' · '+esc(c.area||'')+' '+esc(c.city)+' · '+c.members+' members</small></span><span class="acts" style="margin:0;justify-content:flex-end"><button class="sm s" data-a="tog">'+(c.is_active?'Hide':'Approve')+'</button><button class="sm s" data-a="more">More</button></span></div>'}
     return (pend.length?'<h2>Waiting for approval</h2><div class="card">'+pend.map(row).join('')+'</div>':'')+'<h2>Live cafes</h2><div class="card">'+(live.length?live.map(row).join(''):'<p class="mut" style="margin:0">No live cafes yet.</p>')+'</div>'}
@@ -22,6 +25,9 @@ function body(){
   if(tab==='support')return '<div class="tabs"><button data-s="open" aria-current="'+(sup==='open')+'">Open</button><button data-s="closed" aria-current="'+(sup==='closed')+'">Closed</button></div>'+'<div class="card">'+(MSGS.length?MSGS.map(function(m){return '<div class="li" style="align-items:flex-start"><span><b>'+esc(m.contact||'No contact given')+'</b><small>'+dayt(m.created_at)+'</small><span style="display:block;margin-top:6px;white-space:pre-wrap">'+esc(m.message)+'</span></span><button class="sm s" data-m="'+esc(m.id)+'" data-to="'+(sup==='open'?'closed':'open')+'">'+(sup==='open'?'Close':'Reopen')+'</button></div>'}).join(''):'<p class="mut" style="margin:0">Nothing here.</p>')+'</div>';
 }
 function bind(){
+  document.querySelectorAll('[data-go]').forEach(function(b){b.onclick=function(){tab=b.dataset.go;draw()}});
+  document.querySelectorAll('[data-f]').forEach(function(b){b.onclick=function(){uf=b.dataset.f;draw()}});
+  var q=$('#uq');if(q)q.oninput=function(){uq=q.value.trim().toLowerCase();var pos=q.selectionStart;draw();var n=$('#uq');n.focus();n.setSelectionRange(pos,pos)};
   document.querySelectorAll('[data-a]').forEach(function(b){b.onclick=function(){var id=b.closest('.li').dataset.id,c=CAFES.filter(function(x){return x.id===id})[0];
     if(b.dataset.a==='tog')api('PATCH','/api/admin/cafes/'+id,{is_active:!c.is_active}).then(function(){reload(c.is_active?'Hidden':'Live now')}).catch(function(x){toast(x.message)});
     else more(c)}});
@@ -40,4 +46,6 @@ function more(c){
   $('#ms').onclick=function(){var p=prompt('Mobile number (10 digits)');if(!p)return;var r=confirm('OK = manager, Cancel = staff')?'manager':'staff';api('POST','/api/admin/cafes/'+c.id+'/staff',{phone:p.replace(/\D/g,''),role:r}).then(function(){closeSheet();toast('Added')}).catch(function(x){toast(x.message)})};
   if($('#md'))$('#md').onclick=function(){if(confirm('Delete this cafe and all its cards? This cannot be undone.'))api('DELETE','/api/admin/cafes/'+c.id).then(function(){closeSheet();reload('Deleted')}).catch(function(x){toast(x.message)})};
 }
-setInterval(function(){if(OV&&tab==='cafes'&&!$('#scrim')&&!document.hidden)reload()},20000);
+setInterval(function(){if(OV&&(tab==='cafes'||tab==='overview')&&!$('#scrim')&&!document.hidden)reload()},20000);
+
+function loadLists(){return Promise.all([api('GET','/api/admin/users'),api('GET','/api/admin/staff')]).then(function(r){USERS=r[0].users;STAFF=r[1].staff}).catch(function(e){toast(e.message)})}
