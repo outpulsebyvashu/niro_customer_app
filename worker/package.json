@@ -1,0 +1,20 @@
+{
+  "name": "niro-api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply cafe-loyalty --local",
+    "db:migrate": "wrangler d1 migrations apply cafe-loyalty --remote",
+    "db:seed:local": "wrangler d1 execute cafe-loyalty --local --file=seed.sql",
+    "db:seed": "wrangler d1 execute cafe-loyalty --remote --file=seed.sql",
+    "typecheck": "tsc --noEmit",
+    "test:api": "node --experimental-transform-types --no-warnings test/api.test.mjs"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251001.0",
+    "typescript": "^5.6.0",
+    "wrangler": "^4.0.0"
+  }
+}

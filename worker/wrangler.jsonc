@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "niro-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  // D1 = SQL database. After `wrangler d1 create cafe-loyalty`, paste the printed database_id here.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cafe-loyalty",
+      "database_id": "REPLACE_WITH_YOUR_D1_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // R2 = file storage for profile photos and cafe photos.
+  "r2_buckets": [
+    { "binding": "MEDIA", "bucket_name": "cafe-loyalty-media" }
+  ],
+  "observability": { "enabled": true },
+  "vars": {
+    // "1" = no SMS is sent and every OTP is 123456. Use only while testing. Remove for production.
+    "DEV_OTP": "1"
+  }
+}
