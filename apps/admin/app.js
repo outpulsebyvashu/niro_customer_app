@@ -40,3 +40,4 @@ function more(c){
   $('#ms').onclick=function(){var p=prompt('Mobile number (10 digits)');if(!p)return;var r=confirm('OK = manager, Cancel = staff')?'manager':'staff';api('POST','/api/admin/cafes/'+c.id+'/staff',{phone:p.replace(/\D/g,''),role:r}).then(function(){closeSheet();toast('Added')}).catch(function(x){toast(x.message)})};
   if($('#md'))$('#md').onclick=function(){if(confirm('Delete this cafe and all its cards? This cannot be undone.'))api('DELETE','/api/admin/cafes/'+c.id).then(function(){closeSheet();reload('Deleted')}).catch(function(x){toast(x.message)})};
 }
+setInterval(function(){if(OV&&tab==='cafes'&&!$('#scrim')&&!document.hidden)reload()},20000);

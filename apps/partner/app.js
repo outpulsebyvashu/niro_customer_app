@@ -53,3 +53,4 @@ function bindAdd(){
     api('POST','/api/cafes',{name:$('#n').value.trim(),kind:$('#k').value,stamp_goal:+$('#g').value||8,area:$('#a').value.trim()||undefined,city:$('#c').value.trim(),lat:+$('#la').value,lng:+$('#lo').value,opens:$('#op').value,closes:$('#cl').value,reward_text:$('#r').value.trim()}).then(function(){closeSheet();cur=99;refresh('Submitted. We will review it soon.')}).catch(function(x){er.textContent=x.message;er.hidden=false})};
 }
 function newCafe(){sheet('<h2 style="margin-top:0">Add another cafe</h2>'+addForm());bindAdd()}
+setInterval(function(){if(D&&tab==='overview'&&!$('#scrim')&&!document.hidden)refresh()},20000);

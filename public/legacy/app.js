@@ -89,15 +89,38 @@ function applyMe(m){
   state.prefs=Object.assign({stamps:true,offers:true,treats:true,geo:true},m.prefs||{});
   state.geo.used=m.geo_used_today||0; state.geo.cap=m.geo_cap||2; state.photosOn=!!m.photos_enabled; state.admin=!!m.is_admin; state.gwallet=!!m.google_wallet;
 }
-function loadCards(){
-  return api('GET','/api/memberships').then(function(d){
-    Object.keys(registry).forEach(function(k){registry[k].joined=false});
-    walletOrder=[];
-    d.cards.forEach(function(x){
-      var c=upsertCafe(x.cafe); c.joined=true; c.stamps=x.stamps; c.mid=x.member_code; c.mem=x.id; c.optin=!!x.offers_opt_in; c.rewards=x.rewards_redeemed; walletOrder.push(c.id);
-    });
+function applyCards(d){
+  Object.keys(registry).forEach(function(k){registry[k].joined=false});
+  walletOrder=[];
+  d.cards.forEach(function(x){
+    var c=upsertCafe(x.cafe); c.joined=true; c.stamps=x.stamps; c.mid=x.member_code; c.mem=x.id; c.optin=!!x.offers_opt_in; c.rewards=x.rewards_redeemed; walletOrder.push(c.id);
   });
+  lastSig=sigOf(d);
 }
+function sigOf(d){return JSON.stringify(d.cards.map(function(x){return [x.id,x.stamps,x.rewards_redeemed]}))}
+function loadCards(){return api('GET','/api/memberships').then(applyCards)}
+
+/* live updates: the app checks quietly for changes (faster while a card is open) and updates only what changed. No page reload. */
+var lastSig='', pollT=0, pollBusy=false, lastNear=0;
+function schedulePoll(){clearTimeout(pollT);pollT=setTimeout(poll,state.openCard?2500:8000)}
+function poll(){
+  if(!state.auth||document.hidden||pollBusy){schedulePoll();return}
+  pollBusy=true;
+  api('GET','/api/memberships').then(function(d){
+    if(sigOf(d)!==lastSig){
+      var before={};joined().forEach(function(c){before[c.id]=c.stamps});
+      applyCards(d);
+      var gain=0,msg='';
+      joined().forEach(function(c){var b=before[c.id];if(b!=null&&c.stamps>b){gain++;msg=c.stamps>=c.goal?'Reward ready at '+c.name+'!':'+'+(c.stamps-b)+' stamp'+(c.stamps-b>1?'s':'')+' at '+c.name}else if(b!=null&&c.stamps<b){msg='Reward given at '+c.name}});
+      if(msg)toast(msg);
+      renderHome();renderWallet();if(state.tab==='profile')renderProfile();refreshMap();
+      if(state.openCard&&byId(state.openCard)&&byId(state.openCard).joined&&!$('#scrim').hidden)openSheet(state.openCard,true);
+    }
+    if(Date.now()-lastNear>60000&&you.lat!=null&&state.nearLoaded&&!state.nearErr){lastNear=Date.now();loadNearby()}
+  }).catch(function(e){if(e.status===401){signOut()}}).then(function(){pollBusy=false;schedulePoll()});
+}
+document.addEventListener('visibilitychange',function(){if(!document.hidden&&state.auth){clearTimeout(pollT);poll()}});
+window.addEventListener('focus',function(){if(state.auth){clearTimeout(pollT);poll()}});
 function loadSaved(){
   return api('GET','/api/saved-offers').then(function(d){state.saved={};d.ids.forEach(function(i){state.saved[i]=true});state.savedList=d.offers});
 }
@@ -106,7 +129,7 @@ function loadAccount(){
     if(e.status!==401){toast(e.message)} state.auth=false; afterAccount();
   });
 }
-function afterAccount(){updateHeader();renderHome();renderWallet();if(state.tab==='profile')renderProfile();refreshMap()}
+function afterAccount(){schedulePoll();updateHeader();renderHome();renderWallet();if(state.tab==='profile')renderProfile();refreshMap()}
 
 /* ---------- home ---------- */
 function offerFeed(){
@@ -186,13 +209,13 @@ function updateWallet(){
 }
 
 var X_ICON='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 5l14 14M19 5L5 19"/></svg>';
-function closeSheet(){ $('#scrim').hidden=true; $('#scrim').classList.remove('center'); stopOtpWatch() }
-function showSheet(html){$('#scrim').classList.remove('center');$('#sheet').innerHTML=html;$('#scrim').hidden=false;$('#sheet').scrollTop=0}
+function closeSheet(){ state.openCard=''; $('#scrim').hidden=true; $('#scrim').classList.remove('center'); stopOtpWatch() }
+function showSheet(html){state.openCard='';$('#scrim').classList.remove('center');$('#sheet').innerHTML=html;$('#scrim').hidden=false;$('#sheet').scrollTop=0}
 function sheetHead(t,p){return '<div class="grab"></div><div class="sh-head"><div><h3>'+t+'</h3>'+(p?'<p>'+p+'</p>':'')+'</div><button class="x" data-act="close" aria-label="Close">'+X_ICON+'</button></div>'}
 
 /* the card: a real QR code of the member code, and the stamp history from the server */
-function openSheet(id){
-  var c=byId(id), b=c.brand, s='';
+function openSheet(id,quiet){
+  var c=byId(id), b=c.brand, s=''; state.openCard=id; if(!quiet)schedulePoll(); var keep=quiet&&$('#sheet')?$('#sheet').scrollTop:0;
   $('#scrim').classList.remove('center');
   s+='<div class="grab"></div><div class="bn pt-'+b.pat+'" style="'+bvars(b)+'"><span class="mono">'+esc(initials(c.name))+'</span><div class="bn-t"><h3>'+esc(c.name)+'</h3><p>'+esc(c.area)+' · '+(c.stamps>=c.goal?'Reward ready':(c.goal-c.stamps)+' stamps to your next reward')+'</p></div><button class="x" data-act="close" aria-label="Close">'+X_ICON+'</button></div>';
   s+=QR.svg(c.mid,'Member QR code')+'<div class="mid">MEMBER '+esc(c.mid)+'</div>';
@@ -200,8 +223,8 @@ function openSheet(id){
   s+='<div class="brand-scope" style="'+bvars(b)+'"><div class="grid8">';
   for(var i=0;i<c.goal;i++)s+='<div class="st'+(i<c.stamps?' on':'')+'">'+(i<c.stamps?'✓':(i+1))+'</div>';
   s+='</div></div><ul class="hist" id="hist"><li>Loading history…<span></span></li></ul>';
-  $('#sheet').innerHTML=s; $('#scrim').hidden=false; $('#sheet').scrollTop=0;
-  $('#sheet').querySelector('.x').focus();
+  $('#sheet').innerHTML=s; $('#scrim').hidden=false; $('#sheet').scrollTop=keep;
+  if(!quiet)$('#sheet').querySelector('.x').focus();
   api('GET','/api/memberships/'+c.mem+'/history').then(function(d){
     var h=$('#hist'); if(!h)return; var rows='';
     d.events.slice(0,6).forEach(function(e){rows+='<li>'+esc(dayMon(e.created_at))+'<span>'+(e.kind==='redeem'?'Reward redeemed':'+'+e.qty+' stamp'+(e.qty>1?'s':''))+'</span></li>'});
