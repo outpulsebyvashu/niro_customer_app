@@ -2,8 +2,8 @@
 export const markup = `<div id="gate" role="dialog" aria-live="polite" aria-label="Niro"><svg class="gmark" viewBox="230 230 540 540" aria-hidden="true"><path d="M404 246Q434 446 562 500Q434 554 404 754Q374 554 246 500Q374 446 404 246Z"/><path d="M596 246Q626 446 754 500Q626 554 596 754Q566 554 438 500Q566 446 596 246Z"/></svg><p class="gcount" id="gn" aria-label="Loading"><span id="gnv">0</span><small>%</small></p><div class="gcard"><div class="gico"><svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg></div><h2 id="gt">Allow location</h2><p class="gp" id="gp">Niro uses your location to show cafes near you and alert you when you pass a partner cafe.</p><p class="ghelp" id="gh">Location is blocked for this site. Tap the lock icon next to the address bar, set Location to Allow, then tap the button below.</p><button type="button" id="gb">Allow location</button></div></div>
 <div id="app">
   <header class="top" id="top"><div class="top-in gut">
-    <div><h1 class="hi" id="hi">Hi, Vashudev</h1><button class="loc busy" id="loc" data-act="loc" aria-label="Location, tap to change"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg><span id="locname">Locating…</span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button></div>
-    <button class="ava" id="ava" data-act="profile" aria-label="Profile">V</button>
+    <div><h1 class="hi" id="hi">Niro</h1><button class="loc busy" id="loc" data-act="loc" aria-label="Location, tap to change"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg><span id="locname">Locating…</span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button></div>
+    <button class="ava" id="ava" data-act="profile" aria-label="Sign up or log in"></button>
   </div></header>
 
   <section class="screen" id="home-screen"><div class="gut" id="home"></div></section>
@@ -11,9 +11,9 @@ export const markup = `<div id="gate" role="dialog" aria-live="polite" aria-labe
   <section class="screen" id="profile-screen" hidden><div class="gut" id="profile"></div></section>
   <section class="screen" id="map-screen" hidden>
     <canvas id="mapcv" tabindex="0" role="application" aria-label="Map of nearby cafes and restaurants. Drag or use the arrow keys to explore."></canvas>
-    <div class="area" id="area">Saraswathipuram</div>
+    <a class="attr" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a>
+    <div class="area" id="area">Near you</div>
     <button class="fab" id="recenter" data-act="recenter" aria-label="Back to my location"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3.5"/><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4"/></svg></button>
-    <button class="fab f2" id="simbtn" data-act="sim" aria-label="Simulate walking past a cafe"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13" cy="4.5" r="1.8"/><path d="M9.5 21l2.2-6-2.2-2 1.5-4.5 4 1.5 2 3M11.7 15l3.3 1.5V21"/></svg></button>
   </section>
 </div>
 

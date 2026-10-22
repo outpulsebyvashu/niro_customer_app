@@ -3,7 +3,7 @@
   var g=document.getElementById('gate'); if(!g||g.dataset.on)return; g.dataset.on='1';
   var t=document.getElementById('gt'),p=document.getElementById('gp'),nv=document.getElementById('gnv'),b=document.getElementById('gb'),busy=false,done=false;
   document.documentElement.style.overflow='hidden';
-  function open(pos){ if(done)return; done=true; window.NIRO_POS=pos&&pos.coords?{lat:pos.coords.latitude,lng:pos.coords.longitude}:null; g.classList.add('out'); document.documentElement.style.overflow=''; setTimeout(function(){g.remove()},600); }
+  function open(pos){ if(done)return; done=true; window.NIRO_POS=pos&&pos.coords?{lat:pos.coords.latitude,lng:pos.coords.longitude}:null; g.classList.add('out'); try{document.dispatchEvent(new CustomEvent('niro:location',{detail:window.NIRO_POS}))}catch(e){} document.documentElement.style.overflow=''; setTimeout(function(){g.remove()},600); }
   function block(kind){
     g.classList.add('ask'); g.classList.toggle('denied',kind==='denied'); busy=false; b.disabled=false;
     if(kind==='denied'){t.textContent='Location is needed';p.textContent='Niro can’t open without your location. Please allow it to continue.';b.textContent='Ask again'}

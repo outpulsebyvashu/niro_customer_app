@@ -26,7 +26,7 @@ const MEDIA = {
   get: async (k) => { const o = store.get(k); return o ? { body: o.v, httpMetadata: { contentType: o.type }, httpEtag: '"x"' } : null; },
   delete: async (k) => store.delete(k),
 };
-const env = { DB, MEDIA, ASSETS: { fetch: async () => new Response('<html>app</html>') }, DEV_OTP: '1' };
+const env = { DB, MEDIA, ASSETS: { fetch: async () => new Response('<html>app</html>') }, DEV_OTP: '1', SEED_SAMPLE: '1', ADMIN_PHONES: '9000000099' };
 
 let t = 0;
 const call = async (method, path, { token, body, raw, type } = {}) => {
@@ -219,6 +219,85 @@ assert.ok(guesses.filter((g) => g.status === 400).length <= 5); step('OTP guess 
   const r3 = await worker.fetch(new Request('https://niro.example/api/auth/request-otp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ phone: '9444444444', name: 'S' }) }), { ...env, STARTMESSAGING_API_KEY: 'sm_live_test' });
   assert.equal(r3.status, 502);
   globalThis.fetch = realFetch; step('StartMessaging sends the code; it verifies; provider errors handled');
+}
+
+// ---- live-app endpoints ----
+{
+  const u1 = await login('9555555555', 'Dev');
+  // nearby includes offers
+  const near = ok(await call('GET', '/api/cafes/nearby?lat=12.31&lng=76.63')).cafes;
+  assert.ok(near.length >= 3 && near[0].offers.length >= 1 && near[0].brand.bg); step('nearby cafes carry their offers and brand');
+  // saved offers
+  assert.equal((await call('POST', '/api/saved-offers/nope', { token: u1 })).status, 404);
+  ok(await call('POST', '/api/saved-offers/o1', { token: u1 })); ok(await call('POST', '/api/saved-offers/o2', { token: u1 }));
+  const sv = ok(await call('GET', '/api/saved-offers', { token: u1 }));
+  assert.deepEqual([...sv.ids].sort(), ['o1', 'o2']); assert.equal(sv.offers[0].cafe_name.length > 0, true);
+  ok(await call('DELETE', '/api/saved-offers/o2', { token: u1 }));
+  assert.deepEqual(ok(await call('GET', '/api/saved-offers', { token: u1 })).ids, ['o1']);
+  assert.equal((await call('GET', '/api/saved-offers')).status, 401); step('saved offers list, add, remove');
+  // me extras
+  const me1 = ok(await call('GET', '/api/me', { token: u1 }));
+  assert.equal(me1.geo_cap, 2); assert.equal(me1.geo_used_today, 0); assert.equal(me1.photos_enabled, true); assert.equal(me1.is_admin, false); step('me carries alert count and feature flags');
+  // history + export
+  const card1 = ok(await call('POST', '/api/cafes/agr/join', { token: u1, body: {} }), 201);
+  const staffTok = await login('9000000001', 'Asha');            // owner of the test cafe created earlier
+  const cid2 = sqlite.prepare(`select id from cafes where owner_id is not null limit 1`).get().id;
+  ok(await call('POST', '/api/cafes/' + cid2 + '/join', { token: u1, body: {} }), 201);
+  const c2 = ok(await call('GET', '/api/memberships', { token: u1 })).cards.find((c) => c.cafe.id === cid2);
+  ok(await call('POST', '/api/staff/stamp', { token: staffTok, body: { code: c2.member_code, qty: 1 } }));
+  const hist = ok(await call('GET', '/api/memberships/' + c2.id + '/history', { token: u1 }));
+  assert.equal(hist.events.length, 1); assert.equal(hist.events[0].kind, 'stamp');
+  assert.equal((await call('GET', '/api/memberships/' + c2.id + '/history', { token: staffTok })).status, 404); step('card history is private to its owner');
+  const exp = await call('GET', '/api/me/export', { token: u1 });
+  assert.equal(exp.status, 200); assert.match(exp.headers.get('content-disposition'), /niro-my-data\.json/);
+  assert.equal(exp.data.profile.phone, '+919555555555'); assert.equal(exp.data.loyalty_cards.length, 2); assert.equal(exp.data.stamp_history.length, 1); assert.equal(exp.data.saved_offers.length, 1); step('data export has my cards, stamps and offers');
+  assert.equal((await call('GET', '/api/me/export')).status, 401);
+  // support
+  assert.equal((await call('POST', '/api/support', { body: { message: 'hello there' } })).status, 400); // anonymous needs contact
+  ok(await call('POST', '/api/support', { body: { message: 'I need help with my card', contact: 'a@b.co' } }), 201);
+  ok(await call('POST', '/api/support', { token: u1, body: { message: 'Signed in message' } }), 201);
+  assert.equal(sqlite.prepare('select count(*) n from support_messages').get().n, 2);
+  assert.equal(sqlite.prepare('select user_id from support_messages order by created_at desc limit 1').get().user_id != null, true);
+  for (let i = 0; i < 3; i++) ok(await call('POST', '/api/support', { body: { message: 'message number ' + i, contact: 'x@y.co' } }), 201);
+  assert.equal((await call('POST', '/api/support', { body: { message: 'one too many here', contact: 'x@y.co' } })).status, 429); step('support messages saved and rate limited');
+  // reverse geocode (Nominatim stubbed)
+  const realFetch = globalThis.fetch; let calls = 0;
+  globalThis.fetch = async (u) => { calls++; assert.match(String(u), /nominatim\.openstreetmap\.org\/reverse/); return new Response(JSON.stringify({ address: { suburb: 'Gokulam', city: 'Mysuru', state: 'Karnataka' } }), { status: 200 }); };
+  const rg = ok(await call('GET', '/api/geo/reverse?lat=12.3236&lng=76.6174'));
+  assert.equal(rg.label, 'Gokulam, Mysuru'); assert.equal(calls, 1);
+  assert.equal((await call('GET', '/api/geo/reverse?lat=abc&lng=1')).status, 400);
+  globalThis.fetch = async () => new Response('x', { status: 500 });
+  assert.equal((await call('GET', '/api/geo/reverse?lat=12.5&lng=76.1')).status, 502); step('reverse geocode: area name, validation, upstream failure');
+  globalThis.fetch = realFetch;
+  // account deletion removes support rows? (user_id kept as plain text; check cards removed)
+  // admin
+  const adm = await login('9000000099', 'Admin');
+  assert.equal(ok(await call('GET', '/api/me', { token: adm })).is_admin, true);
+  assert.equal((await call('GET', '/api/admin/cafes', { token: u1 })).status, 403);
+  assert.equal((await call('GET', '/api/admin/cafes')).status, 401); step('admin area is closed to everyone else');
+  const made = ok(await call('POST', '/api/admin/cafes', { token: adm, body: { name: 'Real Cafe', kind: 'cafe', area: 'Gokulam', city: 'Mysuru', lat: 12.32, lng: 76.62, opens: '08:00', closes: '22:00', stamp_goal: 6, reward_text: 'Free tea', brand: { bg: '#112233', ink: '#ffffff', acc: '#ffaa00', pattern: 'dots' }, offer_title: 'Welcome tea' } }), 201);
+  assert.equal(sqlite.prepare('select is_active from cafes where id = ?').get(made.id).is_active, 1);
+  assert.equal(ok(await call('GET', '/api/cafes/' + made.id)).offers[0].title, 'Welcome tea');
+  assert.equal((await call('POST', '/api/admin/cafes', { token: adm, body: { name: 'No place' } })).status, 400);
+  ok(await call('PATCH', '/api/admin/cafes/' + made.id, { token: adm, body: { is_active: false, lat: 12.33, lng: 76.61 } }));
+  assert.equal((await call('GET', '/api/cafes/' + made.id)).status, 404);
+  const list = ok(await call('GET', '/api/admin/cafes', { token: adm })).cafes; assert.ok(list.find((c) => c.id === made.id && !c.is_active));
+  ok(await call('PATCH', '/api/admin/cafes/' + made.id, { token: adm, body: { is_active: true } }));
+  ok(await call('POST', '/api/admin/cafes/' + made.id + '/offers', { token: adm, body: { title: 'Second offer' } }), 201);
+  ok(await call('POST', '/api/admin/cafes/' + made.id + '/staff', { token: adm, body: { phone: '9666666666', role: 'manager' } }), 201);
+  assert.equal(sqlite.prepare(`select role from staff where cafe_id = ?`).get(made.id).role, 'manager'); step('admin can add, move, switch off/on, and staff a cafe');
+  // pending cafes from owners stay hidden until admin approves
+  const pend = sqlite.prepare(`select id from cafes where is_active = 0 and owner_id is not null limit 1`).get();
+  if (pend) { ok(await call('PATCH', '/api/admin/cafes/' + pend.id, { token: adm, body: { is_active: true } })); step('admin approves an owner-created cafe'); }
+}
+// sample cafes are removed on a live database (SEED_SAMPLE not "1")
+{
+  const { pathToFileURL } = await import('node:url');
+  const { default: fresh } = await import(pathToFileURL(root + 'src/index.ts').href + '?fresh=1');
+  const env2 = { ...env, SEED_SAMPLE: undefined };
+  const r = await fresh.fetch(new Request('http://localhost/api/cafes/nearby?lat=12.31&lng=76.63'), env2);
+  const names = (await r.json()).cafes.map((c) => c.name);
+  assert.ok(!names.includes('Agrahara Roasters') && !names.includes('Kaapi Kutir'), names.join()); step('sample cafes removed on a live database');
 }
 
 console.log('\nALL PASSED');

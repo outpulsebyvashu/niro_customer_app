@@ -143,3 +143,13 @@ create table device_tokens (
   updated_at  text not null
 );
 create index device_tokens_user on device_tokens (user_id);
+
+create table support_messages (
+  id          text primary key,
+  user_id     text,
+  contact     text,
+  message     text not null,
+  ip_hash     text not null,
+  status      text not null default 'open',
+  created_at  text not null
+);

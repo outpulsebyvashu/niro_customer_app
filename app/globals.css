@@ -303,3 +303,6 @@ button{cursor:pointer;border:0;background:none}
 #gate .ghelp{font-size:13px;color:#6b6580;display:none;margin:0;line-height:1.5} #gate.denied .ghelp{display:block}
 @keyframes gpulse{0%,100%{transform:scale(1)}50%{transform:scale(1.1) rotate(8deg)}}
 @media (prefers-reduced-motion:reduce){#gate .gmark{animation:none}}
+
+.attr{position:absolute;z-index:4;left:8px;bottom:calc(104px + env(safe-area-inset-bottom,0px));font-size:10px;color:var(--ink2);background:color-mix(in srgb,var(--bg) 78%,transparent);padding:2px 6px;border-radius:6px;text-decoration:none}
+#ava:active{transform:scale(.9)}#ava{transition:transform .2s cubic-bezier(.2,.8,.2,1)}

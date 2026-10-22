@@ -14,7 +14,8 @@ export interface Env {
   DB: D1Database;
   MEDIA?: R2Bucket;        // photo storage (R2). Optional: without it, photo features answer 503 and everything else works
   ASSETS?: Fetcher;       // not used when the app is hosted separately
-  SEED_SAMPLE?: string;    // "0" = do not add the five sample cafes when the tables are first created
+  SEED_SAMPLE?: string;    // "1" = add five sample cafes when the tables are first created (development only)
+  ADMIN_PHONES?: string;   // comma-separated mobile numbers allowed to use the admin page, e.g. 9876543210
   DEV_OTP?: string;        // "1" = skip SMS, every code is 123456 (testing only)
   STARTMESSAGING_API_KEY?: string; // secret: the StartMessaging API key (sm_live_...). Preferred provider when set.
   TWILIO_SID?: string;     // secrets: wrangler secret put TWILIO_SID, etc.
@@ -42,6 +43,9 @@ const PATTERNS = ['dots', 'stripes', 'rings', 'grid'];
 // ---------- first-use database setup ----------
 // If the D1 database is empty, create the tables (and the sample cafes) automatically.
 // This lets you set up from a phone with no SQL pasting. Later changes still go in migrations/.
+const SUPPORT_TABLE = `create table if not exists support_messages (
+  id text primary key, user_id text, contact text, message text not null, ip_hash text not null,
+  status text not null default 'open', created_at text not null)`;
 let dbReady: Promise<void> | null = null;
 async function tablesExist(env: Env): Promise<boolean> {
   const t = await env.DB.prepare(`select name from sqlite_master where type = 'table' and name = 'users'`).first();
@@ -50,13 +54,18 @@ async function tablesExist(env: Env): Promise<boolean> {
 function ensureDb(env: Env): Promise<void> {
   if (!dbReady) {
     dbReady = (async () => {
-      if (await tablesExist(env)) return;
-      try {
-        await env.DB.batch(SCHEMA_STATEMENTS.map((q) => env.DB.prepare(q)));
-        if (env.SEED_SAMPLE !== '0') await env.DB.batch(SEED_STATEMENTS.map((q) => env.DB.prepare(q)));
-      } catch (e) {
-        if (!(await tablesExist(env))) throw e; // another request may have created them at the same moment
+      if (!(await tablesExist(env))) {
+        try {
+          await env.DB.batch(SCHEMA_STATEMENTS.map((q) => env.DB.prepare(q)));
+          if (env.SEED_SAMPLE === '1') await env.DB.batch(SEED_STATEMENTS.map((q) => env.DB.prepare(q)));
+        } catch (e) {
+          if (!(await tablesExist(env))) throw e; // another request may have created them at the same moment
+        }
       }
+      // Tables added after the first release: created here for databases that already exist.
+      await env.DB.prepare(SUPPORT_TABLE).run();
+      // The five sample cafes from the first demo are not real. Remove them unless sample data was asked for.
+      if (env.SEED_SAMPLE !== '1') await env.DB.prepare(`delete from cafes where id in ('agr','kaa','cru','cha','waf') and owner_id is null`).run();
     })().catch((e) => { dbReady = null; throw e; });
   }
   return dbReady;
@@ -181,7 +190,7 @@ async function sendOtp(env: Env, phone: string, code: string, url: URL): Promise
   const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_SID}/Messages.json`, {
     method: 'POST',
     headers: { authorization: 'Basic ' + btoa(`${env.TWILIO_SID}:${env.TWILIO_TOKEN}`), 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ To: phone, From: env.TWILIO_FROM, Body: `${code} is your Niro code. Do not share it. It expires in ${OTP_MINUTES} minutes.` }),
+    body: new URLSearchParams({ To: phone, From: env.TWILIO_FROM, Body: `${code} is your Niro code. It expires in ${OTP_MINUTES} minutes. Do not share it.\n\n@${url.host} #${code}` }),
   });
   if (!res.ok) throw new HttpError(502, 'Could not send the SMS. Try again.');
 }
@@ -233,6 +242,21 @@ function publicUser(u: User, dates: { id: string; label: string; on_date: string
     id: u.id, phone: u.phone, name: u.name, birthday: u.birthday, email: u.email, diet: u.diet, fav_order: u.fav_order,
     prefs: JSON.parse(u.prefs), photo_url: u.photo_key ? `/api/media/${u.photo_key}` : null, special_dates: dates,
   };
+}
+
+function isAdmin(env: Env, u: User): boolean {
+  const list = (env.ADMIN_PHONES ?? '').split(',').map((x) => x.trim()).filter(Boolean).map((x) => { try { return normalizePhone(x); } catch { return ''; } });
+  return list.includes(u.phone);
+}
+async function requireAdmin(req: Request, env: Env): Promise<User> {
+  const u = await requireUser(req, env);
+  if (!isAdmin(env, u)) throw new HttpError(403, 'Admins only.');
+  return u;
+}
+async function meJson(env: Env, u: User) {
+  const d = await env.DB.prepare(`select id, label, on_date from special_dates where user_id = ? order by on_date`).bind(u.id).all<{ id: string; label: string; on_date: string }>();
+  const g = await env.DB.prepare(`select count(*) as n from geo_alerts where user_id = ? and sent_at >= ?`).bind(u.id, istDayStart()).first<{ n: number }>();
+  return { ...publicUser(u, d.results), geo_used_today: g?.n ?? 0, geo_cap: GEO_DAILY_CAP, photos_enabled: !!env.MEDIA, is_admin: isAdmin(env, u) };
 }
 
 type CafeRow = {
@@ -334,7 +358,7 @@ route('POST', '/api/auth/verify', async ({ req, env, url }) => {
   await env.DB.prepare(`insert into sessions (token_hash, user_id, expires_at) values (?, ?, ?)`)
     .bind(await sha256(token), user.id, new Date(Date.now() + SESSION_DAYS * 86400_000).toISOString()).run();
   const secure = url.protocol === 'https:' ? '; Secure' : '';
-  return json({ token, user: publicUser(user) }, 200, {
+  return json({ token, user: await meJson(env, user) }, 200, {
     'set-cookie': `cl_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_DAYS * 86400}${secure}`,
   });
 });
@@ -348,8 +372,7 @@ route('POST', '/api/auth/logout', async ({ req, env }) => {
 // --- my profile ---
 route('GET', '/api/me', async ({ req, env }) => {
   const u = await requireUser(req, env);
-  const d = await env.DB.prepare(`select id, label, on_date from special_dates where user_id = ? order by on_date`).bind(u.id).all<{ id: string; label: string; on_date: string }>();
-  return json(publicUser(u, d.results));
+  return json(await meJson(env, u));
 });
 
 route('PATCH', '/api/me', async ({ req, env }) => {
@@ -379,7 +402,7 @@ route('PATCH', '/api/me', async ({ req, env }) => {
   }
   if (sets.length) await env.DB.prepare(`update users set ${sets.join(', ')} where id = ?`).bind(...vals, u.id).run();
   const fresh = await env.DB.prepare(`select * from users where id = ?`).bind(u.id).first<User>();
-  return json(publicUser(fresh!));
+  return json(await meJson(env, fresh!));
 });
 
 route('PUT', '/api/me/special-dates', async ({ req, env }) => {
@@ -418,6 +441,7 @@ route('DELETE', '/api/me/photo', async ({ req, env }) => {
 route('DELETE', '/api/me', async ({ req, env }) => {
   const u = await requireUser(req, env);
   if (u.photo_key && env.MEDIA) await env.MEDIA.delete(u.photo_key);
+  await env.DB.prepare(`delete from support_messages where user_id = ?`).bind(u.id).run();
   await env.DB.prepare(`delete from users where id = ?`).bind(u.id).run(); // cascades to cards, sessions, dates
   return json({ ok: true }, 200, { 'set-cookie': 'cl_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0' });
 });
@@ -449,7 +473,13 @@ route('GET', '/api/cafes/nearby', async ({ env, url }) => {
     .bind(lat - 0.6, lat + 0.6, lng - 0.6, lng + 0.6).all<CafeRow>();
   const list = rows.results.map((c) => ({ ...publicCafe(c), distance_m: Math.round(distanceM(lat, lng, c.lat, c.lng)) }))
     .sort((a, b) => a.distance_m - b.distance_m).slice(0, limit);
-  return json({ cafes: list });
+  let offers: { id: string; cafe_id: string; title: string; ends_at: string | null }[] = [];
+  if (list.length) {
+    const marks = list.map(() => '?').join(',');
+    offers = (await env.DB.prepare(`select id, cafe_id, title, ends_at from offers where is_active = 1 and (ends_at is null or ends_at > ?) and cafe_id in (${marks}) order by ends_at`)
+      .bind(now(), ...list.map((c) => c.id)).all<{ id: string; cafe_id: string; title: string; ends_at: string | null }>()).results;
+  }
+  return json({ cafes: list.map((c) => ({ ...c, offers: offers.filter((o) => o.cafe_id === c.id) })) });
 });
 
 route('GET', '/api/cafes/:id', async ({ env, p }) => {
@@ -506,8 +536,18 @@ route('DELETE', '/api/memberships/:id', async ({ req, env, p }) => {
   return json({ ok: true });
 });
 
+route('GET', '/api/saved-offers', async ({ req, env }) => {
+  const u = await requireUser(req, env);
+  const r = await env.DB.prepare(
+    `select o.id, o.title, o.ends_at, c.id as cafe_id, c.name as cafe_name from saved_offers s
+       join offers o on o.id = s.offer_id join cafes c on c.id = o.cafe_id
+     where s.user_id = ? and o.is_active = 1 and c.is_active = 1 and (o.ends_at is null or o.ends_at > ?)`).bind(u.id, now()).all<{ id: string }>();
+  return json({ offers: r.results, ids: r.results.map((x) => x.id) });
+});
 route('POST', '/api/saved-offers/:id', async ({ req, env, p }) => {
   const u = await requireUser(req, env);
+  const o = await env.DB.prepare(`select id from offers where id = ? and is_active = 1`).bind(p.id).first();
+  if (!o) throw new HttpError(404, 'Offer not found.');
   await env.DB.prepare(`insert or ignore into saved_offers (user_id, offer_id) values (?, ?)`).bind(u.id, p.id).run();
   return json({ ok: true });
 });
@@ -515,6 +555,77 @@ route('DELETE', '/api/saved-offers/:id', async ({ req, env, p }) => {
   const u = await requireUser(req, env);
   await env.DB.prepare(`delete from saved_offers where user_id = ? and offer_id = ?`).bind(u.id, p.id).run();
   return json({ ok: true });
+});
+
+route('GET', '/api/memberships/:id/history', async ({ req, env, p }) => {
+  const u = await requireUser(req, env);
+  const m = await env.DB.prepare(`select id, joined_at from memberships where id = ? and user_id = ?`).bind(p.id, u.id).first<{ id: string; joined_at: string }>();
+  if (!m) throw new HttpError(404, 'Card not found.');
+  const r = await env.DB.prepare(`select kind, qty, created_at from stamp_events where membership_id = ? order by id desc limit 30`).bind(m.id).all();
+  return json({ joined_at: m.joined_at, events: r.results });
+});
+
+// Everything stored about the signed-in person, as one JSON file.
+route('GET', '/api/me/export', async ({ req, env }) => {
+  const u = await requireUser(req, env);
+  const q = async (sql: string) => (await env.DB.prepare(sql).bind(u.id).all()).results;
+  const data = {
+    exported_at: now(),
+    profile: { id: u.id, phone: u.phone, name: u.name, email: u.email, birthday: u.birthday, food_preference: u.diet, usual_order: u.fav_order, settings: JSON.parse(u.prefs), has_photo: !!u.photo_key },
+    special_dates: await q(`select label, on_date from special_dates where user_id = ?`),
+    loyalty_cards: await q(`select c.name as cafe, m.member_code, m.stamps, m.rewards_redeemed, m.offers_opt_in, m.joined_at from memberships m join cafes c on c.id = m.cafe_id where m.user_id = ?`),
+    stamp_history: await q(`select c.name as cafe, e.kind, e.qty, e.created_at from stamp_events e join memberships m on m.id = e.membership_id join cafes c on c.id = e.cafe_id where m.user_id = ? order by e.id`),
+    saved_offers: await q(`select o.title, c.name as cafe from saved_offers s join offers o on o.id = s.offer_id join cafes c on c.id = o.cafe_id where s.user_id = ?`),
+    nearby_alerts: await q(`select c.name as cafe, g.sent_at from geo_alerts g join cafes c on c.id = g.cafe_id where g.user_id = ? order by g.id`),
+    works_at: await q(`select c.name as cafe, s.role from staff s join cafes c on c.id = s.cafe_id where s.user_id = ?`),
+    support_messages: await q(`select message, contact, created_at from support_messages where user_id = ?`),
+    push_devices: ((await env.DB.prepare(`select count(*) as n from device_tokens where user_id = ?`).bind(u.id).first<{ n: number }>())?.n ?? 0),
+  };
+  return json(data, 200, { 'content-disposition': 'attachment; filename="niro-my-data.json"' });
+});
+
+// Contact support: stored for you to read in the D1 console (table support_messages). Works signed in or out.
+route('POST', '/api/support', async ({ req, env }) => {
+  const b = await body(req);
+  const message = str(b.message, 1000, 'Message', true)!;
+  if (message.length < 5) throw new HttpError(400, 'Write a little more so we can help.');
+  const contact = str(b.contact, 120, 'Contact');
+  let userId: string | null = null;
+  try { userId = (await requireUser(req, env)).id; } catch { /* not signed in */ }
+  if (!userId && !contact) throw new HttpError(400, 'Add a phone number or email so we can reply.');
+  const ipHash = await sha256('ip:' + (req.headers.get('cf-connecting-ip') ?? 'unknown'));
+  const recent = await env.DB.prepare(`select count(*) as n from support_messages where ip_hash = ? and created_at > ?`).bind(ipHash, new Date(Date.now() - 3600_000).toISOString()).first<{ n: number }>();
+  if ((recent?.n ?? 0) >= 5) throw new HttpError(429, 'Too many messages. Try again in an hour.');
+  const id = uuid();
+  await env.DB.prepare(`insert into support_messages (id, user_id, contact, message, ip_hash, created_at) values (?, ?, ?, ?, ?, ?)`).bind(id, userId, contact, message, ipHash, now()).run();
+  return json({ ok: true, id }, 201);
+});
+
+// Area name for a point (OpenStreetMap Nominatim, looked up by our server so the phone sends no third-party request).
+route('GET', '/api/geo/reverse', async ({ req, env, url }) => {
+  const lat = Number(url.searchParams.get('lat')), lng = Number(url.searchParams.get('lng'));
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new HttpError(400, 'Send lat and lng.');
+  const la = lat.toFixed(3), lo = lng.toFixed(3);
+  const cache = (globalThis as { caches?: { default?: Cache } }).caches?.default;
+  const key = new Request(`https://cache.niro.invalid/reverse/${la}/${lo}`);
+  const hit = cache ? await cache.match(key) : undefined;
+  if (hit) return hit;
+  const ipKey = 'geo:' + (req.headers.get('cf-connecting-ip') ?? 'unknown');
+  const used = await env.DB.prepare(`select count(*) as n from otp_requests where phone = ? and created_at > ?`).bind(ipKey, new Date(Date.now() - 3600_000).toISOString()).first<{ n: number }>();
+  if ((used?.n ?? 0) >= 120) throw new HttpError(429, 'Too many lookups. Try again later.');
+  await env.DB.prepare(`insert into otp_requests (phone, created_at) values (?, ?)`).bind(ipKey, now()).run();
+  let res: Response;
+  try {
+    res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=16&addressdetails=1&lat=${la}&lon=${lo}`,
+      { headers: { 'user-agent': 'Niro/1.0 (+https://niro.cards)', 'accept-language': 'en' }, signal: AbortSignal.timeout(4000) });
+  } catch { throw new HttpError(502, 'Could not look up your area.'); }
+  if (!res.ok) throw new HttpError(502, 'Could not look up your area.');
+  const a = ((await res.json()) as { address?: Record<string, string> }).address ?? {};
+  const locality = a.suburb || a.neighbourhood || a.quarter || a.city_district || a.village || a.hamlet || '';
+  const city = a.city || a.town || a.municipality || a.county || a.state_district || a.state || '';
+  const out = json({ locality, city, label: [locality, city].filter(Boolean).join(', ') }, 200, { 'cache-control': 'public, max-age=86400' });
+  if (cache) await cache.put(key, out.clone());
+  return out;
 });
 
 // --- nearby alerts: the phone asks before showing a popup. Max 2 a day in total (India time). ---
@@ -615,32 +726,34 @@ route('GET', '/api/staff/me', async ({ req, env }) => {
 });
 
 // --- owner app: create and manage a cafe ---
-route('POST', '/api/cafes', async ({ req, env }) => {
-  const u = await requireUser(req, env);
-  const b = await body(req);
+const DEFAULT_BRAND = '{"bg":"#0b0b0b","ink":"#fafafa","acc":"#d9a066","pattern":"dots"}';
+function cafeInsert(env: Env, b: Record<string, unknown>, ownerId: string | null, active: 0 | 1) {
   const lat = Number(b.lat), lng = Number(b.lng);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new HttpError(400, 'lat and lng are required.');
   if (Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new HttpError(400, 'lat and lng are not valid.');
   const kind = b.kind === 'restaurant' ? 'restaurant' : 'cafe';
+  const id = uuid();
+  const stmt = env.DB.prepare(`insert into cafes (id, owner_id, name, kind, area, city, lat, lng, opens, closes, brand, stamp_goal, reward_text, is_active)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(id, ownerId, str(b.name, 80, 'Name', true), kind, str(b.area, 60, 'Area'), str(b.city, 60, 'City') ?? 'Mysuru', lat, lng,
+      hhmm(b.opens, 'opens'), hhmm(b.closes, 'closes'), b.brand ? cleanBrand(b.brand) : DEFAULT_BRAND,
+      Math.max(1, Math.min(Number(b.stamp_goal) || 8, 20)), str(b.reward_text, 60, 'reward_text') ?? 'Free filter coffee', active);
+  return { id, stmt };
+}
+
+route('POST', '/api/cafes', async ({ req, env }) => {
+  const u = await requireUser(req, env);
+  const b = await body(req);
   const mine = await env.DB.prepare(`select count(*) as n from cafes where owner_id = ?`).bind(u.id).first<{ n: number }>();
   if ((mine?.n ?? 0) >= 3) throw new HttpError(429, 'You can add up to 3 cafes. Contact us for more.');
-  const id = uuid();
-  // A new cafe stays hidden (is_active = 0) until you approve it: in D1, run update cafes set is_active = 1 where id = '...'.
-  await env.DB.batch([
-    env.DB.prepare(`insert into cafes (id, owner_id, name, kind, area, city, lat, lng, opens, closes, brand, stamp_goal, reward_text, is_active)
-                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`)
-      .bind(id, u.id, str(b.name, 80, 'Name', true), kind, str(b.area, 60, 'Area'), str(b.city, 60, 'City') ?? 'Mysuru', lat, lng,
-        hhmm(b.opens, 'opens'), hhmm(b.closes, 'closes'), b.brand ? cleanBrand(b.brand) : '{"bg":"#0b0b0b","ink":"#fafafa","acc":"#d9a066","pattern":"dots"}',
-        Math.max(1, Math.min(Number(b.stamp_goal) || 8, 20)), str(b.reward_text, 60, 'reward_text') ?? 'Free filter coffee'),
-    env.DB.prepare(`insert into staff (id, cafe_id, user_id, role) values (?, ?, ?, 'owner')`).bind(uuid(), id, u.id),
-  ]);
+  // A new cafe stays hidden (is_active = 0) until you approve it on the admin page.
+  const { id, stmt } = cafeInsert(env, b, u.id, 0);
+  await env.DB.batch([stmt, env.DB.prepare(`insert into staff (id, cafe_id, user_id, role) values (?, ?, ?, 'owner')`).bind(uuid(), id, u.id)]);
   return json({ id, pending_approval: true }, 201);
 });
 
-route('PATCH', '/api/cafes/:id', async ({ req, env, p }) => {
-  const u = await requireUser(req, env);
-  await requireManager(env, u.id, p.id);
-  const b = await body(req);
+/** Fields of a cafe that can be edited. Admins may also move it, rename its city and switch it on or off. */
+function cafeFields(b: Record<string, unknown>, admin: boolean) {
   const sets: string[] = []; const vals: unknown[] = [];
   if ('name' in b) { sets.push('name = ?'); vals.push(str(b.name, 80, 'Name', true)); }
   if ('area' in b) { sets.push('area = ?'); vals.push(str(b.area, 60, 'Area')); }
@@ -649,8 +762,83 @@ route('PATCH', '/api/cafes/:id', async ({ req, env, p }) => {
   if ('reward_text' in b) { sets.push('reward_text = ?'); vals.push(str(b.reward_text, 60, 'reward_text', true)); }
   if ('stamp_goal' in b) { sets.push('stamp_goal = ?'); vals.push(Math.max(1, Math.min(Number(b.stamp_goal) || 8, 20))); }
   if ('brand' in b) { sets.push('brand = ?'); vals.push(cleanBrand(b.brand)); }
+  if (admin) {
+    if ('city' in b) { sets.push('city = ?'); vals.push(str(b.city, 60, 'City', true)); }
+    if ('kind' in b) { sets.push('kind = ?'); vals.push(b.kind === 'restaurant' ? 'restaurant' : 'cafe'); }
+    if ('lat' in b || 'lng' in b) {
+      const lat = Number(b.lat), lng = Number(b.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new HttpError(400, 'lat and lng are not valid.');
+      sets.push('lat = ?', 'lng = ?'); vals.push(lat, lng);
+    }
+    if ('is_active' in b) { sets.push('is_active = ?'); vals.push(b.is_active ? 1 : 0); }
+  }
+  return { sets, vals };
+}
+
+route('PATCH', '/api/cafes/:id', async ({ req, env, p }) => {
+  const u = await requireUser(req, env);
+  await requireManager(env, u.id, p.id);
+  const { sets, vals } = cafeFields(await body(req), false);
   if (sets.length) await env.DB.prepare(`update cafes set ${sets.join(', ')} where id = ?`).bind(...vals, p.id).run();
   return json({ ok: true });
+});
+
+// --- admin: add and manage the real cafes (people listed in ADMIN_PHONES) ---
+route('GET', '/api/admin/cafes', async ({ req, env }) => {
+  await requireAdmin(req, env);
+  const r = await env.DB.prepare(`select id, name, kind, area, city, lat, lng, opens, closes, stamp_goal, reward_text, brand, is_active, owner_id, created_at from cafes order by created_at desc limit 300`).all<CafeRow & { owner_id: string | null }>();
+  const members = await env.DB.prepare(`select cafe_id, count(*) as n from memberships group by cafe_id`).all<{ cafe_id: string; n: number }>();
+  const n = new Map(members.results.map((m) => [m.cafe_id, m.n]));
+  return json({ cafes: r.results.map((c) => ({ ...c, brand: JSON.parse(c.brand), members: n.get(c.id) ?? 0 })) });
+});
+
+route('POST', '/api/admin/cafes', async ({ req, env }) => {
+  await requireAdmin(req, env);
+  const b = await body(req);
+  const { id, stmt } = cafeInsert(env, b, null, 1);
+  const stmts = [stmt];
+  const offer = str(b.offer_title, 100, 'Offer');
+  if (offer) stmts.push(env.DB.prepare(`insert into offers (id, cafe_id, title, ends_at) values (?, ?, ?, ?)`).bind(uuid(), id, offer, endsAt(b.offer_ends_at)));
+  await env.DB.batch(stmts);
+  return json({ id }, 201);
+});
+
+route('PATCH', '/api/admin/cafes/:id', async ({ req, env, p }) => {
+  await requireAdmin(req, env);
+  const { sets, vals } = cafeFields(await body(req), true);
+  if (!sets.length) throw new HttpError(400, 'Nothing to change.');
+  const r = await env.DB.prepare(`update cafes set ${sets.join(', ')} where id = ?`).bind(...vals, p.id).run();
+  if (!r.meta.changes) throw new HttpError(404, 'Cafe not found.');
+  return json({ ok: true });
+});
+
+route('POST', '/api/admin/cafes/:id/offers', async ({ req, env, p }) => {
+  await requireAdmin(req, env);
+  const b = await body(req);
+  const c = await env.DB.prepare(`select id from cafes where id = ?`).bind(p.id).first();
+  if (!c) throw new HttpError(404, 'Cafe not found.');
+  const id = uuid();
+  await env.DB.prepare(`insert into offers (id, cafe_id, title, ends_at) values (?, ?, ?, ?)`).bind(id, p.id, str(b.title, 100, 'Title', true), endsAt(b.ends_at)).run();
+  return json({ id }, 201);
+});
+
+async function addStaff(env: Env, cafeId: string, b: Record<string, unknown>, actorIsOwner: boolean) {
+  const phone = normalizePhone(b.phone);
+  const role = b.role === 'manager' ? 'manager' : 'staff';
+  if (role === 'manager' && !actorIsOwner) throw new HttpError(403, 'Only the owner can add a manager.');
+  await env.DB.prepare(`insert into users (id, phone) values (?, ?) on conflict(phone) do nothing`).bind(uuid(), phone).run();
+  const target = await env.DB.prepare(`select id from users where phone = ?`).bind(phone).first<{ id: string }>();
+  await env.DB.prepare(`insert into staff (id, cafe_id, user_id, role, hourly_rate) values (?, ?, ?, ?, ?)
+                        on conflict(cafe_id, user_id) do update set role = excluded.role, hourly_rate = excluded.hourly_rate, is_active = 1
+                        where staff.role != 'owner'`)
+    .bind(uuid(), cafeId, target!.id, role, Math.min(100000, Math.max(0, Number(b.hourly_rate) || 0))).run();
+}
+route('POST', '/api/admin/cafes/:id/staff', async ({ req, env, p }) => {
+  await requireAdmin(req, env);
+  const c = await env.DB.prepare(`select id from cafes where id = ?`).bind(p.id).first();
+  if (!c) throw new HttpError(404, 'Cafe not found.');
+  await addStaff(env, p.id, await body(req), true);
+  return json({ ok: true }, 201);
 });
 
 route('POST', '/api/cafes/:id/photos', async ({ req, env, p }) => {
@@ -678,18 +866,8 @@ route('POST', '/api/cafes/:id/offers', async ({ req, env, p }) => {
 
 route('POST', '/api/cafes/:id/staff', async ({ req, env, p }) => {
   const u = await requireUser(req, env);
-  await requireManager(env, u.id, p.id);
-  const b = await body(req);
-  const phone = normalizePhone(b.phone);
-  const role = b.role === 'manager' ? 'manager' : 'staff';
   const me = await requireManager(env, u.id, p.id);
-  if (role === 'manager' && me.role !== 'owner') throw new HttpError(403, 'Only the owner can add a manager.');
-  await env.DB.prepare(`insert into users (id, phone) values (?, ?) on conflict(phone) do nothing`).bind(uuid(), phone).run();
-  const target = await env.DB.prepare(`select id from users where phone = ?`).bind(phone).first<{ id: string }>();
-  await env.DB.prepare(`insert into staff (id, cafe_id, user_id, role, hourly_rate) values (?, ?, ?, ?, ?)
-                        on conflict(cafe_id, user_id) do update set role = excluded.role, hourly_rate = excluded.hourly_rate, is_active = 1
-                        where staff.role != 'owner'`)
-    .bind(uuid(), p.id, target!.id, role, Math.min(100000, Math.max(0, Number(b.hourly_rate) || 0))).run();
+  await addStaff(env, p.id, await body(req), me.role === 'owner');
   return json({ ok: true }, 201);
 });
 
