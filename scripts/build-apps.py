@@ -13,7 +13,7 @@ csp = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' h
 for name, (title, perm) in APPS.items():
     d = os.path.join(out, name); shutil.rmtree(d, ignore_errors=True); os.makedirs(d)
     for f in ['kit.css', 'kit.js']: shutil.copy(f'apps/{f}', d)
-    shutil.copy(f'apps/{name}/index.html', d); shutil.copy(f'apps/{name}/app.js', d)
+    for f in sorted(os.listdir(f'apps/{name}')): shutil.copy(f'apps/{name}/{f}', d)  # index.html, app.js and any extra files (admin: billing + invoice)
     shutil.copy('public/favicon.svg', d); shutil.copy('public/favicon.ico', d); shutil.copytree('public/icons', os.path.join(d, 'icons'))
     open(os.path.join(d, 'manifest.webmanifest'), 'w').write('{"name":"%s","short_name":"%s","start_url":"/","display":"standalone","background_color":"#f7f7f5","theme_color":"#0b0b0b","icons":[{"src":"/icons/icon-192.png","sizes":"192x192","type":"image/png"},{"src":"/icons/icon-512.png","sizes":"512x512","type":"image/png"}]}' % (title, title.replace('Niro ', '')))
     open(os.path.join(d, '_routes.json'), 'w').write('{"version":1,"include":["/api/*"],"exclude":[]}\n')

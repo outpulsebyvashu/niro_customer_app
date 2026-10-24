@@ -346,6 +346,47 @@ assert.ok(guesses.filter((g) => g.status === 400).length <= 5); step('OTP guess 
   const sup = ok(await call('GET', '/api/admin/support', { token: adm })).messages; assert.ok(sup.length >= 1);
   ok(await call('PATCH', '/api/admin/support/' + sup[0].id, { token: adm, body: { status: 'closed' } }));
   assert.equal((await call('DELETE', '/api/admin/cafes/' + made.id, { token: adm })).status, 409); step('admin: overview, support inbox, delete needs hidden cafe');
+
+  // ---- billing: invoices from Niro to partners ----
+  assert.equal((await call('GET', '/api/admin/billing', { token: pm })).status, 403);
+  assert.equal((await call('POST', '/api/admin/invoices', { token: pm, body: { cafe_id: made.id, items: [{ name: 'x', qty: 1, price: 1 }] } })).status, 403);
+  assert.equal((await call('GET', '/api/admin/billing')).status, 401); step('billing: admins only');
+  let bill = ok(await call('GET', '/api/admin/billing', { token: adm }));
+  assert.equal(bill.settings.plans.monthly, 199); assert.equal(bill.settings.tax_rate, 18); assert.equal(bill.invoices.length, 0); step('billing: default settings');
+  assert.equal((await call('PUT', '/api/admin/billing/settings', { token: adm, body: { from: { name: 'Outpulse LLP' }, tax_rate: 150 } })).status, 400);
+  assert.equal((await call('PUT', '/api/admin/billing/settings', { token: adm, body: { from: {}, tax_rate: 18 } })).status, 400);
+  ok(await call('PUT', '/api/admin/billing/settings', { token: adm, body: { from: { name: 'Outpulse LLP', gstin: '29abcde1234f1z5', contact: 'hello@niro.cards' }, plans: { monthly: 299, yearly: 2999 }, tax_name: 'GST', tax_rate: 18, terms_days: 10, note: 'Pay by UPI.' } }));
+  bill = ok(await call('GET', '/api/admin/billing', { token: adm }));
+  assert.equal(bill.settings.plans.monthly, 299); assert.equal(bill.settings.from.gstin, '29ABCDE1234F1Z5'); step('billing: settings saved and validated');
+  const inv1 = ok(await call('POST', '/api/admin/invoices', { token: adm, body: { cafe_id: made.id, items: [{ name: 'Niro monthly plan', qty: 1, price: 299, plan: 'monthly' }], total: 1, subtotal: 1 } }), 201);
+  assert.equal(inv1.number, 'NIRO-0001'); assert.equal(inv1.bill_to.name, 'Real Cafe'); assert.ok(inv1.bill_to.contact.endsWith('9666666666') || inv1.bill_to.contact === '');
+  assert.equal(inv1.subtotal, 299); assert.equal(inv1.tax, 53.82); assert.equal(inv1.total, 352.82); assert.equal(inv1.status, 'unpaid');
+  assert.equal(inv1.note, 'Pay by UPI.'); assert.equal(inv1.from.name, 'Outpulse LLP'); assert.ok(!('seller' in inv1)); assert.ok(inv1.period_start && inv1.period_end > inv1.period_start);
+  assert.equal(inv1.due_on > inv1.issued_on, true); step('billing: invoice for a partner, totals worked out on the server');
+  assert.equal((await call('POST', '/api/admin/invoices', { token: adm, body: { items: [{ name: 'Setup', qty: 1, price: 500 }] } })).status, 400);
+  assert.equal((await call('POST', '/api/admin/invoices', { token: adm, body: { cafe_id: 'nope', items: [{ name: 'Setup', qty: 1, price: 500 }] } })).status, 404);
+  assert.equal((await call('POST', '/api/admin/invoices', { token: adm, body: { bill_to: { name: 'Salon' }, items: [{ name: 'Setup', qty: 0, price: 500 }] } })).status, 400);
+  assert.equal((await call('POST', '/api/admin/invoices', { token: adm, body: { bill_to: { name: 'Salon' }, items: Array(31).fill({ name: 'x', qty: 1, price: 1 }) } })).status, 400);
+  assert.equal((await call('POST', '/api/admin/invoices', { token: adm, body: { bill_to: { name: 'Salon' }, items: [{ name: 'Setup', qty: 1, price: -5 }] } })).status, 400);
+  assert.equal((await call('POST', '/api/admin/invoices', { token: adm, body: { bill_to: { name: 'Salon' }, items: [{ name: 'Setup', qty: 1, price: 5 }], issued_on: '2026-02-10', due_on: '2026-02-01' } })).status, 400); step('billing: bad invoices refused');
+  const inv2 = ok(await call('POST', '/api/admin/invoices', { token: adm, body: { bill_to: { name: 'Glow Salon', line: 'Indiranagar' }, items: [{ name: 'Card design', qty: 2, price: 750.5 }], tax_rate: 0, issued_on: '2026-01-01', due_on: '2026-01-08', style: 'block' } }), 201);
+  assert.equal(inv2.number, 'NIRO-0002'); assert.equal(inv2.total, 1501); assert.equal(inv2.overdue, true); assert.equal(inv2.style, 'block'); step('billing: numbers run in order, overdue flagged');
+  const ed = ok(await call('PATCH', '/api/admin/invoices/' + inv1.id, { token: adm, body: { items: [{ name: 'Niro monthly plan', qty: 2, price: 299, plan: 'monthly' }], style: 'term' } }));
+  assert.equal(ed.subtotal, 598); assert.equal(ed.total, 705.64); assert.equal(ed.style, 'term'); step('billing: edits recompute totals');
+  bill = ok(await call('GET', '/api/admin/billing', { token: adm }));
+  assert.equal(bill.summary.outstanding, 705.64 + 1501); assert.equal(bill.summary.overdue, 1501); assert.equal(bill.summary.overdue_count, 1);
+  const paid = ok(await call('PATCH', '/api/admin/invoices/' + inv1.id, { token: adm, body: { status: 'paid' } }));
+  assert.equal(paid.status, 'paid'); assert.ok(paid.paid_on); assert.equal(sqlite.prepare('select plan from cafes where id = ?').get(made.id).plan, 'monthly');
+  ok(await call('PUT', '/api/admin/billing/settings', { token: adm, body: { from: { name: 'Renamed LLP' } } }));
+  assert.equal(ok(await call('GET', '/api/admin/invoices/' + inv1.id, { token: adm })).from.name, 'Outpulse LLP');
+  assert.equal((await call('PATCH', '/api/admin/invoices/' + inv1.id, { token: adm, body: { items: [{ name: 'x', qty: 1, price: 1 }] } })).status, 409);
+  bill = ok(await call('GET', '/api/admin/billing', { token: adm }));
+  assert.equal(bill.summary.outstanding, 1501); assert.equal(bill.summary.collected_month, 705.64); step('billing: mark paid moves the partner onto the plan, paid invoices are locked');
+  ok(await call('PATCH', '/api/admin/invoices/' + inv2.id, { token: adm, body: { status: 'void' } }));
+  assert.equal((await call('PATCH', '/api/admin/invoices/' + inv2.id, { token: adm, body: { status: 'unpaid' } })).status, 409);
+  assert.equal(ok(await call('GET', '/api/admin/billing', { token: adm })).summary.outstanding, 0);
+  assert.equal((await call('GET', '/api/admin/invoices/' + inv2.id, { token: pm })).status, 403);
+  assert.equal(ok(await call('GET', '/api/admin/invoices/' + inv2.id, { token: adm })).status, 'void'); step('billing: void invoices stay void and drop out of totals');
 }
 // sample cafes are removed on a live database (SEED_SAMPLE not "1")
 {

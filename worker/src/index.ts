@@ -52,6 +52,20 @@ const SUPPORT_TABLE = `create table if not exists support_messages (
 const LIVE_TABLE = `create table if not exists live_events (
   id integer primary key autoincrement, user_id text not null, kind text not null, cafe_name text, qty integer, created_at text not null)`;
 const LIVE_INDEX = `create index if not exists live_events_user on live_events (user_id, id)`;
+// Billing (same as migrations/0002_billing.sql)
+const BILLING_TABLES = [
+  `create table if not exists invoices (
+    id text primary key, seq integer not null unique, number text not null unique,
+    cafe_id text references cafes(id) on delete set null, seller text not null default '{}', bill_to text not null, items text not null,
+    tax_name text not null default 'GST', tax_rate real not null default 18,
+    subtotal real not null, tax real not null, total real not null,
+    issued_on text not null, due_on text not null, period_start text, period_end text,
+    status text not null default 'unpaid' check (status in ('unpaid', 'paid', 'void')), paid_on text, note text,
+    style text not null default 'paper' check (style in ('paper', 'block', 'term')), created_by text, created_at text not null)`,
+  `create index if not exists invoices_cafe on invoices (cafe_id, issued_on)`,
+  `create index if not exists invoices_status on invoices (status, due_on)`,
+  `create table if not exists billing_settings (id integer primary key check (id = 1), data text not null)`,
+];
 let dbReady: Promise<void> | null = null;
 async function tablesExist(env: Env): Promise<boolean> {
   const t = await env.DB.prepare(`select name from sqlite_master where type = 'table' and name = 'users'`).first();
@@ -72,6 +86,7 @@ function ensureDb(env: Env): Promise<void> {
       await env.DB.prepare(SUPPORT_TABLE).run();
       await env.DB.prepare(LIVE_TABLE).run();
       await env.DB.prepare(LIVE_INDEX).run();
+      for (const q of BILLING_TABLES) await env.DB.prepare(q).run();
       // The five sample cafes from the first demo are not real. Remove them unless sample data was asked for.
       if (env.SEED_SAMPLE !== '1') await env.DB.prepare(`delete from cafes where id in ('agr','kaa','cru','cha','waf') and owner_id is null`).run();
     })().catch((e) => { dbReady = null; throw e; });
@@ -1121,6 +1136,216 @@ route('DELETE', '/api/admin/cafes/:id', async ({ req, env, p }) => {
   const r = await env.DB.prepare(`delete from cafes where id = ? and is_active = 0`).bind(p.id).run();
   if (!r.meta.changes) throw new HttpError(409, 'Only a hidden cafe can be deleted. Hide it first.');
   return json({ ok: true });
+});
+
+// ---------- billing: invoices from Niro to partner businesses (admins only) ----------
+// Totals are always worked out here from the items; whatever totals a client sends are ignored.
+const PLAN_KINDS = ['monthly', 'yearly'];
+const INVOICE_STYLES = ['paper', 'block', 'term'];
+const DEFAULT_BILLING = {
+  from: { name: 'Niro by Outpulse LLP', line: 'Loyalty cards & marketing', contact: '', gstin: '', address: '' },
+  plans: { monthly: 199, yearly: 1999 },
+  tax_name: 'GST', tax_rate: 18, terms_days: 7,
+  note: 'Pay by UPI or bank transfer within 7 days. Thank you for growing with Niro.',
+};
+type BillingSettings = typeof DEFAULT_BILLING;
+type InvoiceItem = { name: string; qty: number; price: number; plan?: string };
+type InvoiceRow = {
+  id: string; seq: number; number: string; cafe_id: string | null; seller: string; bill_to: string; items: string; tax_name: string; tax_rate: number;
+  subtotal: number; tax: number; total: number; issued_on: string; due_on: string; period_start: string | null; period_end: string | null;
+  status: string; paid_on: string | null; note: string | null; style: string; created_at: string; cafe_name?: string | null;
+};
+
+const istToday = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+const round2 = (n: number) => Math.round(n * 100) / 100;
+function addDaysTo(day: string, n: number): string {
+  const d = new Date(day + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10);
+}
+function addMonthsTo(day: string, n: number): string {
+  const d = new Date(day + 'T00:00:00Z'); const dd = d.getUTCDate(); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + n);
+  const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(dd, last)); return d.toISOString().slice(0, 10);
+}
+function day(v: unknown, field: string, fallback: string | null): string | null {
+  if (v === undefined || v === null || v === '') return fallback;
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(Date.parse(v + 'T00:00:00Z'))) throw new HttpError(400, `${field} must be YYYY-MM-DD.`);
+  return v;
+}
+function money2(v: unknown, field: string, max = 10_000_000): number {
+  const n = typeof v === 'string' ? Number(v) : v;
+  if (typeof n !== 'number' || !Number.isFinite(n) || n < 0 || n > max) throw new HttpError(400, `${field} must be a number from 0 to ${max}.`);
+  return round2(n);
+}
+function taxRate(v: unknown): number {
+  const n = money2(v, 'Tax rate', 100);
+  return n;
+}
+function cleanItems(v: unknown): InvoiceItem[] {
+  if (!Array.isArray(v) || !v.length) throw new HttpError(400, 'Add at least one item.');
+  if (v.length > 30) throw new HttpError(400, 'An invoice can have up to 30 items.');
+  return v.map((raw, i) => {
+    const it = (raw ?? {}) as Record<string, unknown>;
+    const qty = Number(it.qty);
+    if (!Number.isInteger(qty) || qty < 1 || qty > 999) throw new HttpError(400, `Item ${i + 1}: quantity must be a whole number from 1 to 999.`);
+    const out: InvoiceItem = { name: str(it.name, 80, `Item ${i + 1} name`, true)!, qty, price: money2(it.price, `Item ${i + 1} price`) };
+    if (typeof it.plan === 'string' && PLAN_KINDS.includes(it.plan)) out.plan = it.plan;
+    return out;
+  });
+}
+function cleanParty(v: unknown, field: string, requireName: boolean) {
+  const o = (v && typeof v === 'object' && !Array.isArray(v) ? v : {}) as Record<string, unknown>;
+  return {
+    name: str(o.name, 80, `${field} name`, requireName) ?? '',
+    line: str(o.line, 120, `${field} details`) ?? '',
+    contact: str(o.contact, 80, `${field} contact`) ?? '',
+    gstin: (str(o.gstin, 15, 'GSTIN') ?? '').toUpperCase(),
+    ...(field === 'From' ? { address: str(o.address, 200, 'Address') ?? '' } : {}),
+  };
+}
+function totalsOf(items: InvoiceItem[], rate: number) {
+  const subtotal = round2(items.reduce((a, it) => a + it.qty * it.price, 0));
+  const tax = round2(subtotal * rate / 100);
+  return { subtotal, tax, total: round2(subtotal + tax) };
+}
+async function billingSettings(env: Env): Promise<BillingSettings> {
+  const r = await env.DB.prepare(`select data from billing_settings where id = 1`).first<{ data: string }>();
+  if (!r) return structuredClone(DEFAULT_BILLING);
+  const s = JSON.parse(r.data);
+  return { ...DEFAULT_BILLING, ...s, from: { ...DEFAULT_BILLING.from, ...s.from }, plans: { ...DEFAULT_BILLING.plans, ...s.plans } };
+}
+function invoiceOut(r: InvoiceRow) {
+  const today = istToday();
+  const { seller, ...rest } = r;
+  return { ...rest, from: JSON.parse(seller || '{}'), bill_to: JSON.parse(r.bill_to), items: JSON.parse(r.items), overdue: r.status === 'unpaid' && r.due_on < today };
+}
+async function invoiceById(env: Env, id: string) {
+  const r = await env.DB.prepare(`select i.*, c.name as cafe_name from invoices i left join cafes c on c.id = i.cafe_id where i.id = ?`).bind(id).first<InvoiceRow>();
+  if (!r) throw new HttpError(404, 'Invoice not found.');
+  return invoiceOut(r);
+}
+
+route('GET', '/api/admin/billing', async ({ req, env }) => {
+  await requireAdmin(req, env);
+  const today = istToday();
+  const [settings, list, sum] = await Promise.all([
+    billingSettings(env),
+    env.DB.prepare(`select i.*, c.name as cafe_name from invoices i left join cafes c on c.id = i.cafe_id order by i.seq desc limit 300`).all<InvoiceRow>(),
+    env.DB.prepare(
+      `select coalesce(sum(case when status = 'unpaid' then total end), 0) as outstanding,
+              coalesce(sum(case when status = 'unpaid' and due_on < ?1 then total end), 0) as overdue,
+              count(case when status = 'unpaid' and due_on < ?1 then 1 end) as overdue_count,
+              coalesce(sum(case when status = 'paid' and paid_on >= ?2 then total end), 0) as collected_month,
+              count(case when status != 'void' then 1 end) as invoices
+       from invoices`).bind(today, today.slice(0, 8) + '01').first(),
+  ]);
+  return json({ settings, summary: sum, invoices: list.results.map(invoiceOut), today });
+});
+
+route('PUT', '/api/admin/billing/settings', async ({ req, env }) => {
+  await requireAdmin(req, env);
+  const b = await body(req);
+  const plans = (b.plans && typeof b.plans === 'object' ? b.plans : {}) as Record<string, unknown>;
+  const terms = Number(b.terms_days ?? DEFAULT_BILLING.terms_days);
+  if (!Number.isInteger(terms) || terms < 0 || terms > 120) throw new HttpError(400, 'Payment terms must be 0 to 120 days.');
+  const s: BillingSettings = {
+    from: cleanParty(b.from, 'From', true) as BillingSettings['from'],
+    plans: { monthly: money2(plans.monthly ?? DEFAULT_BILLING.plans.monthly, 'Monthly price', 1_000_000), yearly: money2(plans.yearly ?? DEFAULT_BILLING.plans.yearly, 'Yearly price', 1_000_000) },
+    tax_name: str(b.tax_name, 20, 'Tax name') ?? 'GST',
+    tax_rate: taxRate(b.tax_rate ?? DEFAULT_BILLING.tax_rate),
+    terms_days: terms,
+    note: str(b.note, 300, 'Note') ?? '',
+  };
+  await env.DB.prepare(`insert into billing_settings (id, data) values (1, ?) on conflict(id) do update set data = excluded.data`).bind(JSON.stringify(s)).run();
+  return json({ settings: s });
+});
+
+route('POST', '/api/admin/invoices', async ({ req, env }) => {
+  const admin = await requireAdmin(req, env);
+  const b = await body(req);
+  const s = await billingSettings(env);
+  let cafeId: string | null = null;
+  let billTo = cleanParty(b.bill_to, 'Bill to', false);
+  if (b.cafe_id !== undefined && b.cafe_id !== null && b.cafe_id !== '') {
+    const c = await env.DB.prepare(
+      `select c.id, c.name, c.area, c.city, u.phone as owner_phone from cafes c left join users u on u.id = c.owner_id where c.id = ?`)
+      .bind(String(b.cafe_id)).first<{ id: string; name: string; area: string | null; city: string; owner_phone: string | null }>();
+    if (!c) throw new HttpError(404, 'Partner not found.');
+    cafeId = c.id;
+    billTo = {
+      name: billTo.name || c.name,
+      line: billTo.line || [c.area, c.city].filter(Boolean).join(', '),
+      contact: billTo.contact || (c.owner_phone ?? ''),
+      gstin: billTo.gstin,
+    };
+  }
+  if (!billTo.name) throw new HttpError(400, 'Choose a partner or enter who the invoice is for.');
+  const items = cleanItems(b.items);
+  const rate = b.tax_rate === undefined ? s.tax_rate : taxRate(b.tax_rate);
+  const t = totalsOf(items, rate);
+  const issued = day(b.issued_on, 'Issue date', istToday())!;
+  const due = day(b.due_on, 'Due date', addDaysTo(issued, s.terms_days))!;
+  if (due < issued) throw new HttpError(400, 'The due date is before the issue date.');
+  let pStart = day(b.period_start, 'Period start', null), pEnd = day(b.period_end, 'Period end', null);
+  const plan = items.find((it) => it.plan)?.plan;
+  if (plan && !pStart) pStart = issued;
+  if (plan && pStart && !pEnd) pEnd = addDaysTo(addMonthsTo(pStart, plan === 'yearly' ? 12 * items.find((it) => it.plan)!.qty : items.find((it) => it.plan)!.qty), -1);
+  const style = INVOICE_STYLES.includes(String(b.style)) ? String(b.style) : 'paper';
+  const id = uuid();
+  // The next number is picked inside the insert itself, so two invoices made at the same moment can't share one.
+  await env.DB.prepare(
+    `insert into invoices (id, seq, number, cafe_id, seller, bill_to, items, tax_name, tax_rate, subtotal, tax, total, issued_on, due_on, period_start, period_end, status, note, style, created_by, created_at)
+     select ?1, coalesce(max(seq), 0) + 1, 'NIRO-' || printf('%04d', coalesce(max(seq), 0) + 1), ?2, ?18, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'unpaid', ?14, ?15, ?16, ?17 from invoices`)
+    .bind(id, cafeId, JSON.stringify(billTo), JSON.stringify(items), s.tax_name, rate, t.subtotal, t.tax, t.total, issued, due, pStart, pEnd,
+      str(b.note, 300, 'Note') ?? s.note, style, admin.id, now(), JSON.stringify(s.from)).run();
+  return json(await invoiceById(env, id), 201);
+});
+
+route('GET', '/api/admin/invoices/:id', async ({ req, env, p }) => {
+  await requireAdmin(req, env);
+  return json(await invoiceById(env, p.id));
+});
+
+route('PATCH', '/api/admin/invoices/:id', async ({ req, env, p }) => {
+  await requireAdmin(req, env);
+  const b = await body(req);
+  const cur = await invoiceById(env, p.id);
+  const sets: string[] = [], vals: unknown[] = [];
+  const contentKeys = ['items', 'bill_to', 'tax_rate', 'issued_on', 'due_on', 'period_start', 'period_end', 'note'];
+  if (contentKeys.some((k) => k in b) && cur.status !== 'unpaid') throw new HttpError(409, 'Only unpaid invoices can be edited. Mark it unpaid first.');
+  if ('items' in b || 'tax_rate' in b) {
+    const items = 'items' in b ? cleanItems(b.items) : (cur.items as InvoiceItem[]);
+    const rate = 'tax_rate' in b ? taxRate(b.tax_rate) : cur.tax_rate;
+    const t = totalsOf(items, rate);
+    sets.push('items = ?', 'tax_rate = ?', 'subtotal = ?', 'tax = ?', 'total = ?'); vals.push(JSON.stringify(items), rate, t.subtotal, t.tax, t.total);
+  }
+  if ('bill_to' in b) { const bt = cleanParty(b.bill_to, 'Bill to', true); sets.push('bill_to = ?'); vals.push(JSON.stringify(bt)); }
+  const issued = 'issued_on' in b ? day(b.issued_on, 'Issue date', cur.issued_on)! : cur.issued_on;
+  const due = 'due_on' in b ? day(b.due_on, 'Due date', cur.due_on)! : cur.due_on;
+  if (due < issued) throw new HttpError(400, 'The due date is before the issue date.');
+  if ('issued_on' in b) { sets.push('issued_on = ?'); vals.push(issued); }
+  if ('due_on' in b) { sets.push('due_on = ?'); vals.push(due); }
+  if ('period_start' in b) { sets.push('period_start = ?'); vals.push(day(b.period_start, 'Period start', null)); }
+  if ('period_end' in b) { sets.push('period_end = ?'); vals.push(day(b.period_end, 'Period end', null)); }
+  if ('note' in b) { sets.push('note = ?'); vals.push(str(b.note, 300, 'Note') ?? ''); }
+  if ('style' in b) {
+    if (!INVOICE_STYLES.includes(String(b.style))) throw new HttpError(400, 'Style must be paper, block or term.');
+    sets.push('style = ?'); vals.push(String(b.style));
+  }
+  let planToSet: string | null = null;
+  if ('status' in b) {
+    const st = String(b.status);
+    if (!['unpaid', 'paid', 'void'].includes(st)) throw new HttpError(400, 'Status must be unpaid, paid or void.');
+    if (cur.status === 'void' && st !== 'void') throw new HttpError(409, 'A void invoice stays void. Make a new one instead.');
+    sets.push('status = ?', 'paid_on = ?');
+    vals.push(st, st === 'paid' ? (day(b.paid_on, 'Paid date', cur.paid_on ?? istToday())) : null);
+    if (st === 'paid' && cur.cafe_id) planToSet = (cur.items as InvoiceItem[]).find((it) => it.plan)?.plan ?? null;
+  }
+  if (!sets.length) throw new HttpError(400, 'Nothing to change.');
+  const stmts = [env.DB.prepare(`update invoices set ${sets.join(', ')} where id = ?`).bind(...vals, p.id)];
+  // Paying a plan invoice puts the partner on that plan.
+  if (planToSet) stmts.push(env.DB.prepare(`update cafes set plan = ? where id = ?`).bind(planToSet, cur.cafe_id));
+  await env.DB.batch(stmts);
+  return json(await invoiceById(env, p.id));
 });
 
 // ---------- entry point ----------

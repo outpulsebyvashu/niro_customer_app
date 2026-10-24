@@ -14,8 +14,11 @@ npm run deploy
 ```
 Local: `npm run db:migrate:local && npm run db:seed:local && npm run dev`.
 
+Billing: invoices are numbered NIRO-0001, NIRO-0002 ...; the API works out every total itself. Paying a plan invoice moves the partner onto that plan. Only unpaid invoices can be edited; void ones stay void.
+The admin app prints the PDF through the browser (Save as PDF) in the style picked: Paper, Block or Terminal.
+
 Tables: `users, otp_codes, otp_requests, sessions, special_dates, cafes, offers, saved_offers, staff, shifts,
-memberships, stamp_events, geo_alerts, device_tokens`. R2 folders: `avatars/<user id>/` (private), `cafe-media/<cafe id>/` (public).
+memberships, stamp_events, geo_alerts, device_tokens, invoices, billing_settings`. R2 folders: `avatars/<user id>/` (private), `cafe-media/<cafe id>/` (public).
 Add database changes as new files in `migrations/` (`0002_...sql`), never by editing `0001`.
 
 ## SMS
@@ -38,6 +41,8 @@ Sign in returns a token. Send it as `Authorization: Bearer <token>`.
 | Staff | `POST /api/staff/stamp` `{code, qty}`, `/redeem` `{code}`, `/clock-in`, `/clock-out`, `GET /api/staff/me` |
 | Owner | `POST /api/cafes`, `PATCH /api/cafes/:id`, `POST /api/cafes/:id/photos`, `/offers`, `/staff` |
 | Owner | `GET /api/cafes/:id/stats`, `GET /api/cafes/:id/payroll?from&to` |
+| Admin | `GET /api/admin/billing` (settings, totals, invoices), `PUT /api/admin/billing/settings` |
+| Admin | `POST /api/admin/invoices` `{cafe_id or bill_to, items, tax_rate?, issued_on?, due_on?, note?}`, `GET/PATCH /api/admin/invoices/:id` (`status`: unpaid, paid, void) |
 
 D1 has no row-level security, so each rule is checked in `src/index.ts`. Customers cannot change their own stamps.
 `npm run test:api` runs about 35 checks against SQLite and an in-memory R2 (Node 22.7+, no installs).
