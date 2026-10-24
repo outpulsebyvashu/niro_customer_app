@@ -6,6 +6,8 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Typeface
+import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -14,13 +16,17 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -32,16 +38,23 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 
 /**
- * The Niro staff app, opened as its own screen inside the customer app (instead of the browser).
- * It loads the live staff site, so it updates without a new APK. Back or the arrow returns to the customer app.
+ * A native shell around one Niro web app. It is the whole app for Niro Partner and Niro Workforce
+ * (they load their live site, so they update without a new APK), and it is the in-app staff screen
+ * inside the customer app (opened with a back bar). Camera and location are only offered to the app's own site.
  */
-class StaffActivity : ComponentActivity() {
+class ShellActivity : ComponentActivity() {
 
     private lateinit var web: WebView
-    private lateinit var bar: LinearLayout
     private lateinit var root: LinearLayout
+    private lateinit var bar: LinearLayout
+    private lateinit var offline: LinearLayout
+    private lateinit var startUrl: String
+    private lateinit var host: String
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var camRequest: PermissionRequest? = null
+    private var geoCallback: GeolocationPermissions.Callback? = null
+    private var geoOrigin: String? = null
+    private var failed = false
     private var lastBg = 0
     private val handler = Handler(Looper.getMainLooper())
 
@@ -51,6 +64,12 @@ class StaffActivity : ComponentActivity() {
         if (r != null) {
             if (ok) r.grant(arrayOf(PermissionRequest.RESOURCE_VIDEO_CAPTURE)) else r.deny()
         }
+    }
+
+    private val locationPerm = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+        geoCallback?.invoke(geoOrigin, grants.values.any { it }, false)
+        geoCallback = null
+        geoOrigin = null
     }
 
     private val filePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -63,27 +82,31 @@ class StaffActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, true)
         val dp = resources.displayMetrics.density
+        startUrl = intent?.getStringExtra(EXTRA_URL) ?: BuildConfig.START_URL
+        host = Uri.parse(startUrl).host ?: ""
+        val showBar = intent?.getBooleanExtra(EXTRA_BAR, false) == true
 
         root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.WHITE) }
         bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(Color.WHITE)
+            visibility = if (showBar) View.VISIBLE else View.GONE
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (48 * dp).toInt())
             addView(TextView(context).apply {
                 text = "‹"
                 textSize = 30f
                 setTextColor(Color.parseColor("#0B0B0B"))
                 gravity = Gravity.CENTER
-                contentDescription = "Back to Niro"
+                contentDescription = "Back"
                 setOnClickListener { finish() }
                 layoutParams = LinearLayout.LayoutParams((52 * dp).toInt(), ViewGroup.LayoutParams.MATCH_PARENT)
             })
             addView(TextView(context).apply {
-                text = "Niro Staff"
+                text = intent?.getStringExtra(EXTRA_TITLE) ?: ""
                 textSize = 17f
                 setTextColor(Color.parseColor("#0B0B0B"))
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setTypeface(typeface, Typeface.BOLD)
             })
         }
         web = WebView(this).apply {
@@ -91,20 +114,22 @@ class StaffActivity : ComponentActivity() {
             setBackgroundColor(Color.WHITE)
             overScrollMode = View.OVER_SCROLL_NEVER
         }
+        offline = buildOfflineView()
         root.addView(bar)
         root.addView(web)
-        setContentView(FrameLayout(this).apply { addView(root) })
+        setContentView(FrameLayout(this).apply { addView(root); addView(offline) })
         paint(Color.WHITE)
 
         CookieManager.getInstance().apply { setAcceptCookie(true); setAcceptThirdPartyCookies(web, false) }
         web.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
+            setGeolocationEnabled(true)
             mediaPlaybackRequiresUserGesture = false
             allowFileAccess = false
             allowContentAccess = false
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            userAgentString = userAgentString + " NiroApp/1.0 NiroStaff"
+            userAgentString = userAgentString + " NiroApp/1.0 Niro" + BuildConfig.APP_KIND
             setSupportZoom(false)
             builtInZoomControls = false
         }
@@ -113,34 +138,59 @@ class StaffActivity : ComponentActivity() {
                 val u = request.url
                 val s = u.scheme ?: ""
                 if (s == "about" || s == "blob" || s == "data") return false
-                if (s == "https" && u.host == HOST) return false
+                if (s == "https" && u.host == host) return false
                 try {
                     startActivity(Intent(Intent.ACTION_VIEW, u).addCategory(Intent.CATEGORY_BROWSABLE))
                 } catch (e: ActivityNotFoundException) {
-                    Toast.makeText(this@StaffActivity, "No app can open this link", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@ShellActivity, "No app can open this link", Toast.LENGTH_SHORT).show()
                 }
                 return true
             }
 
+            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                if (request.isForMainFrame) {
+                    failed = true
+                    offline.visibility = View.VISIBLE
+                    offline.bringToFront()
+                }
+            }
+
             override fun onPageFinished(view: WebView, url: String) {
+                if (!failed) offline.visibility = View.GONE
                 CookieManager.getInstance().flush()
             }
 
-            override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
                 recreate()
                 return true
             }
         }
         web.webChromeClient = object : WebChromeClient() {
+            override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) {
+                if (Uri.parse(origin).host != host) {
+                    callback.invoke(origin, false, false)
+                    return
+                }
+                val fine = ContextCompat.checkSelfPermission(this@ShellActivity, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                val coarse = ContextCompat.checkSelfPermission(this@ShellActivity, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                if (fine || coarse) {
+                    callback.invoke(origin, true, false)
+                } else {
+                    geoCallback?.invoke(geoOrigin, false, false)
+                    geoCallback = callback
+                    geoOrigin = origin
+                    locationPerm.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+                }
+            }
+
             override fun onPermissionRequest(request: PermissionRequest) {
-                // Only the camera, and only for the staff site (scanning customer QR codes).
-                val wantsCam = request.resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)
-                val onlyCam = request.resources.all { it == PermissionRequest.RESOURCE_VIDEO_CAPTURE }
-                if (request.origin.host != HOST || !wantsCam || !onlyCam) {
+                // Only the camera, and only for this app's own site (scanning QR codes).
+                val onlyCam = request.resources.isNotEmpty() && request.resources.all { it == PermissionRequest.RESOURCE_VIDEO_CAPTURE }
+                if (request.origin.host != host || !onlyCam) {
                     request.deny()
                     return
                 }
-                if (ContextCompat.checkSelfPermission(this@StaffActivity, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                if (ContextCompat.checkSelfPermission(this@ShellActivity, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
                     request.grant(arrayOf(PermissionRequest.RESOURCE_VIDEO_CAPTURE))
                 } else {
                     camRequest?.deny()
@@ -164,13 +214,60 @@ class StaffActivity : ComponentActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (web.canGoBack()) web.goBack() else finish()
+                if (offline.visibility == View.VISIBLE) finish()
+                else if (web.canGoBack()) web.goBack()
+                else finish()
             }
         })
 
-        if (savedInstanceState != null) web.restoreState(savedInstanceState) else web.loadUrl(START)
+        if (savedInstanceState != null) web.restoreState(savedInstanceState) else load()
     }
 
+    private fun load() {
+        failed = false
+        offline.visibility = View.GONE
+        val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+        if (cm.activeNetworkInfo?.isConnected != true) {
+            offline.visibility = View.VISIBLE
+            offline.bringToFront()
+            return
+        }
+        web.loadUrl(startUrl)
+    }
+
+    private fun buildOfflineView(): LinearLayout {
+        val pad = (24 * resources.displayMetrics.density).toInt()
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(pad, pad, pad, pad)
+            setBackgroundColor(Color.WHITE)
+            visibility = View.GONE
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            addView(TextView(context).apply {
+                text = getString(R.string.offline_title)
+                textSize = 26f
+                setTextColor(Color.parseColor("#0B0B0B"))
+                gravity = Gravity.CENTER
+            })
+            addView(TextView(context).apply {
+                text = getString(R.string.offline_text)
+                textSize = 16f
+                setTextColor(Color.parseColor("#62625F"))
+                gravity = Gravity.CENTER
+                setPadding(0, pad / 2, 0, pad)
+            })
+            addView(Button(context).apply {
+                text = getString(R.string.retry)
+                isAllCaps = false
+                setTextColor(Color.WHITE)
+                setBackgroundColor(Color.parseColor("#0B0B0B"))
+                setOnClickListener { load() }
+            })
+        }
+    }
+
+    /** Colours the status bar, the bottom bar and the back bar to match the page. */
     private fun paint(bg: Int) {
         if (bg == lastBg) return
         lastBg = bg
@@ -188,10 +285,12 @@ class StaffActivity : ComponentActivity() {
 
     private val poll = object : Runnable {
         override fun run() {
-            web.evaluateJavascript(
-                "(function(){try{var c=getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();" +
-                    "if(c)return c;return getComputedStyle(document.body).backgroundColor}catch(e){return ''}})()"
-            ) { raw -> parse(raw)?.let { paint(it) } }
+            if (offline.visibility != View.VISIBLE) {
+                web.evaluateJavascript(
+                    "(function(){try{var c=getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();" +
+                        "if(c)return c;return getComputedStyle(document.body).backgroundColor}catch(e){return ''}})()"
+                ) { raw -> parse(raw)?.let { paint(it) } }
+            }
             handler.postDelayed(this, 700)
         }
     }
@@ -236,7 +335,8 @@ class StaffActivity : ComponentActivity() {
     }
 
     companion object {
-        const val HOST = "workforce.niro.cards"
-        const val START = "https://workforce.niro.cards/"
+        const val EXTRA_URL = "url"
+        const val EXTRA_BAR = "bar"
+        const val EXTRA_TITLE = "title"
     }
 }

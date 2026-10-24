@@ -1,5 +1,4 @@
 <resources>
-    <string name="app_name">Niro-beta</string>
     <string name="offline_title">No connection</string>
     <string name="offline_text">Check your internet and try again.</string>
     <string name="retry">Try again</string>

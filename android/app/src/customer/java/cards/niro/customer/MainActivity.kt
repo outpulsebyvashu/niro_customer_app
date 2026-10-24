@@ -252,8 +252,13 @@ class MainActivity : ComponentActivity() {
                 if (scheme == "about" || scheme == "blob" || scheme == "data") return false
                 if (scheme == "https" && (uri.host == HOST || uri.host == "www.$HOST")) return false
                 // The staff app opens as its own screen inside this app, not in the browser.
-                if (scheme == "https" && uri.host == StaffActivity.HOST) {
-                    startActivity(Intent(this@MainActivity, StaffActivity::class.java))
+                if (scheme == "https" && uri.host == "workforce.niro.cards") {
+                    startActivity(
+                        Intent(this@MainActivity, ShellActivity::class.java)
+                            .putExtra(ShellActivity.EXTRA_URL, "https://workforce.niro.cards/")
+                            .putExtra(ShellActivity.EXTRA_BAR, true)
+                            .putExtra(ShellActivity.EXTRA_TITLE, "Niro Workforce")
+                    )
                     return true
                 }
                 // Anything else (partner and admin apps, Google Wallet, WhatsApp, links, phone, mail)

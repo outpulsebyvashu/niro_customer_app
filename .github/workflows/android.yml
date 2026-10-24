@@ -26,25 +26,30 @@ jobs:
         with:
           gradle-version: "8.9"
 
-      - name: Build signed APK
+      - name: Build the three signed APKs
         working-directory: android
         env:
           APP_VERSION_CODE: ${{ github.run_number }}
         run: gradle --no-daemon assembleRelease
 
-      - name: Name the APK
-        run: cp android/app/build/outputs/apk/release/app-release.apk Niro-beta.apk
+      - name: Name the APKs
+        run: |
+          mkdir out
+          cp android/app/build/outputs/apk/customer/release/app-customer-release.apk out/Niro-beta.apk
+          cp android/app/build/outputs/apk/partner/release/app-partner-release.apk out/Niro-Partner.apk
+          cp android/app/build/outputs/apk/workforce/release/app-workforce-release.apk out/Niro-Workforce.apk
+          ls -la out
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Niro-beta-apk
-          path: Niro-beta.apk
+          name: Niro-apks
+          path: out/*.apk
 
-      - name: Publish a release with the APK
+      - name: Publish a release with the APKs
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "apk-${{ github.run_number }}" Niro-beta.apk \
-            --title "Niro-beta 1.0.${{ github.run_number }}" \
-            --notes "Android app (Kotlin). Opens the live Niro customer app at niro.cards. Install Niro-beta.apk." \
+          gh release create "apk-${{ github.run_number }}" out/Niro-beta.apk out/Niro-Partner.apk out/Niro-Workforce.apk \
+            --title "Niro apps 1.0.${{ github.run_number }}" \
+            --notes "Three independent Android apps: Niro-beta (customers), Niro Partner (business owners), Niro Workforce (staff). Each opens its live site, so web updates need no new APK." \
             --latest
