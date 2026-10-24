@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.ConnectivityManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -36,6 +37,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
+import org.json.JSONObject
 
 /**
  * Niro customer app. A thin native shell around the live web app at https://niro.cards,
@@ -61,6 +63,48 @@ class MainActivity : ComponentActivity() {
         geoCallback?.invoke(geoOrigin, grants.values.any { it }, false)
         geoCallback = null
         geoOrigin = null
+    }
+
+    private var askedNotif = false
+    private var askedFine = false
+    private var askedBg = false
+    private val alertsPerm = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { alertsStep() }
+
+    private fun has(p: String) = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
+
+    /** One permission at a time: notifications, then location, then "allow all the time" (Android asks for that last, on its own). */
+    private fun alertsStep() {
+        if (Build.VERSION.SDK_INT >= 33 && !has(Manifest.permission.POST_NOTIFICATIONS) && !askedNotif) {
+            askedNotif = true
+            alertsPerm.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS)); return
+        }
+        if (!has(Manifest.permission.ACCESS_FINE_LOCATION) && !askedFine) {
+            askedFine = true
+            alertsPerm.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)); return
+        }
+        if (Build.VERSION.SDK_INT >= 29 && has(Manifest.permission.ACCESS_FINE_LOCATION) &&
+            !has(Manifest.permission.ACCESS_BACKGROUND_LOCATION) && !askedBg
+        ) {
+            askedBg = true
+            alertsPerm.launch(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION)); return
+        }
+        val app = applicationContext
+        Thread { Net.remember(app); Geo.apply(app); Push.sync(app) }.start()
+        tellWeb()
+    }
+
+    private fun permJson(): String = JSONObject()
+        .put("inApp", true)
+        .put("notif", Notifier.canNotify(this))
+        .put("fine", has(Manifest.permission.ACCESS_FINE_LOCATION))
+        .put("bg", Geo.hasBackground(this))
+        .put("push", Push.available(this))
+        .toString()
+
+    private fun tellWeb() {
+        web.evaluateJavascript("window.__niroPerms&&window.__niroPerms(" + permJson() + ")", null)
     }
 
     private val filePicker = registerForActivityResult(
@@ -105,6 +149,7 @@ class MainActivity : ComponentActivity() {
         root.addView(offline)
         setContentView(root)
 
+        Notifier.channels(this)
         configureWebView()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -206,7 +251,12 @@ class MainActivity : ComponentActivity() {
                 val scheme = uri.scheme ?: ""
                 if (scheme == "about" || scheme == "blob" || scheme == "data") return false
                 if (scheme == "https" && (uri.host == HOST || uri.host == "www.$HOST")) return false
-                // Anything else (partner, staff and admin apps, Google Wallet, WhatsApp, links, phone, mail)
+                // The staff app opens as its own screen inside this app, not in the browser.
+                if (scheme == "https" && uri.host == StaffActivity.HOST) {
+                    startActivity(Intent(this@MainActivity, StaffActivity::class.java))
+                    return true
+                }
+                // Anything else (partner and admin apps, Google Wallet, WhatsApp, links, phone, mail)
                 // opens in the right app, not inside this one.
                 try {
                     startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE))
@@ -226,6 +276,7 @@ class MainActivity : ComponentActivity() {
             override fun onPageFinished(view: WebView, url: String) {
                 if (!failed) offline.visibility = View.GONE
                 CookieManager.getInstance().flush()
+                Net.remember(applicationContext)
             }
 
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
@@ -301,6 +352,53 @@ class MainActivity : ComponentActivity() {
                     pendingSave = null
                 }
             }
+        }
+
+        /** What the phone currently allows: {inApp, notif, fine, bg, push}. */
+        @JavascriptInterface
+        fun permState(): String = permJson()
+
+        /** Starts the permission steps for nearby alerts and push (the web app shows its own explanation first). */
+        @JavascriptInterface
+        fun enableAlerts() {
+            runOnUiThread {
+                askedNotif = false; askedFine = false; askedBg = false
+                alertsStep()
+            }
+        }
+
+        @JavascriptInterface
+        fun openAppSettings() {
+            runOnUiThread {
+                startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+            }
+        }
+
+        /** {center:{lat,lng}, fences:[{id,name,lat,lng,offer}]}: cafes for the phone to watch in the background. */
+        @JavascriptInterface
+        fun setGeofences(json: String) {
+            val app = applicationContext
+            Thread { Net.remember(app); Geo.set(app, json) }.start()
+        }
+
+        @JavascriptInterface
+        fun clearGeofences() {
+            val app = applicationContext
+            Thread { Geo.clear(app) }.start()
+        }
+
+        /** After sign-in: tell the server which account this phone's push token belongs to. */
+        @JavascriptInterface
+        fun syncPush() {
+            val app = applicationContext
+            Thread { Net.remember(app); Push.sync(app) }.start()
+        }
+
+        /** Before log out: stop pushes for this account on this phone. */
+        @JavascriptInterface
+        fun pushOff() {
+            val app = applicationContext
+            Thread { Push.unregister(app) }.start()
         }
 
         @JavascriptInterface
