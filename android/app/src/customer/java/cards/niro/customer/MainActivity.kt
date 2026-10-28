@@ -69,6 +69,14 @@ class MainActivity : ComponentActivity() {
     private var askedFine = false
     private var askedBg = false
     private var askedBt = false
+    private var camRequest: PermissionRequest? = null
+    private val cameraPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        val r = camRequest
+        camRequest = null
+        if (r != null) {
+            if (ok) r.grant(arrayOf(PermissionRequest.RESOURCE_VIDEO_CAPTURE)) else r.deny()
+        }
+    }
     private val alertsPerm = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { alertsStep() }
@@ -320,8 +328,21 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            /* The QR scanner needs the camera, and only for Niro's own site. Everything else is refused. */
             override fun onPermissionRequest(request: PermissionRequest) {
-                request.deny()
+                runOnUiThread {
+                    val own = request.origin?.host == "niro.cards"
+                    val onlyCamera = request.resources.isNotEmpty() && request.resources.all { it == PermissionRequest.RESOURCE_VIDEO_CAPTURE }
+                    if (!own || !onlyCamera) {
+                        request.deny()
+                    } else if (has(Manifest.permission.CAMERA)) {
+                        request.grant(arrayOf(PermissionRequest.RESOURCE_VIDEO_CAPTURE))
+                    } else {
+                        camRequest?.deny()
+                        camRequest = request
+                        cameraPerm.launch(Manifest.permission.CAMERA)
+                    }
+                }
             }
 
             override fun onShowFileChooser(
