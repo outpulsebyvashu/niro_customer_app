@@ -102,7 +102,7 @@ object Notifier {
         )
         val n = NotificationCompat.Builder(ctx, channel)
             .setSmallIcon(R.drawable.ic_stat_niro)
-            .setColor(0xFF5E17EB.toInt())
+            .setColor(0xFF13D4FE.toInt())
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
