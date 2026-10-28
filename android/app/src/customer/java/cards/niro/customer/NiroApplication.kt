@@ -9,6 +9,7 @@ class NiroApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         Notifier.channels(this)
+        BeaconScan.watchBluetooth(this)
         if (BuildConfig.FCM_APP_ID.isNotBlank() && BuildConfig.FCM_API_KEY.isNotBlank()) {
             try {
                 if (FirebaseApp.getApps(this).isEmpty()) {

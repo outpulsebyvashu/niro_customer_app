@@ -68,6 +68,7 @@ class MainActivity : ComponentActivity() {
     private var askedNotif = false
     private var askedFine = false
     private var askedBg = false
+    private var askedBt = false
     private val alertsPerm = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { alertsStep() }
@@ -90,8 +91,12 @@ class MainActivity : ComponentActivity() {
             askedBg = true
             alertsPerm.launch(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION)); return
         }
+        if (Build.VERSION.SDK_INT >= 31 && !has(Manifest.permission.BLUETOOTH_SCAN) && !askedBt) {
+            askedBt = true
+            alertsPerm.launch(arrayOf(Manifest.permission.BLUETOOTH_SCAN)); return
+        }
         val app = applicationContext
-        Thread { Net.remember(app); Geo.apply(app); Push.sync(app) }.start()
+        Thread { Net.remember(app); Geo.apply(app); BeaconScan.apply(app); Push.sync(app) }.start()
         tellWeb()
     }
 
@@ -100,6 +105,7 @@ class MainActivity : ComponentActivity() {
         .put("notif", Notifier.canNotify(this))
         .put("fine", has(Manifest.permission.ACCESS_FINE_LOCATION))
         .put("bg", Geo.hasBackground(this))
+        .put("bt", BeaconScan.canScan(this))
         .put("push", Push.available(this))
         .toString()
 
@@ -367,7 +373,7 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun enableAlerts() {
             runOnUiThread {
-                askedNotif = false; askedFine = false; askedBg = false
+                askedNotif = false; askedFine = false; askedBg = false; askedBt = false
                 alertsStep()
             }
         }

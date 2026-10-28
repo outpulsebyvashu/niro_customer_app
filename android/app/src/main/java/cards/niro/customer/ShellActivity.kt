@@ -9,6 +9,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.net.ConnectivityManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -17,6 +18,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
+import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.ValueCallback
@@ -77,6 +79,64 @@ class ShellActivity : ComponentActivity() {
         fileCallback = null
     }
 
+    /* Partner app only: lets the cafe's phone broadcast the Niro Bluetooth beacon. */
+    private var pendingBeacon: Pair<String, String>? = null
+    private val beaconPerm = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { beginBeaconIfReady() }
+
+    private fun granted(p: String) = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
+
+    private fun tellBeacon() {
+        if (BuildConfig.APP_KIND != "Partner") return
+        web.evaluateJavascript("window.__niroBeacon&&window.__niroBeacon(" + Beacon.stateJson(this) + ")", null)
+    }
+
+    private fun beaconAsk(code: String, name: String) {
+        pendingBeacon = code to name
+        val need = ArrayList<String>()
+        if (Build.VERSION.SDK_INT >= 31) {
+            if (!granted(Manifest.permission.BLUETOOTH_ADVERTISE)) need += Manifest.permission.BLUETOOTH_ADVERTISE
+            if (!granted(Manifest.permission.BLUETOOTH_CONNECT)) need += Manifest.permission.BLUETOOTH_CONNECT
+        }
+        if (Build.VERSION.SDK_INT >= 33 && !granted(Manifest.permission.POST_NOTIFICATIONS)) need += Manifest.permission.POST_NOTIFICATIONS
+        if (need.isNotEmpty()) beaconPerm.launch(need.toTypedArray()) else beginBeaconIfReady()
+    }
+
+    private fun beginBeaconIfReady() {
+        val (code, name) = pendingBeacon ?: return
+        pendingBeacon = null
+        if (Build.VERSION.SDK_INT >= 31 && !granted(Manifest.permission.BLUETOOTH_ADVERTISE)) {
+            Toast.makeText(this, "Allow “Nearby devices” so this phone can work as your beacon.", Toast.LENGTH_LONG).show()
+            tellBeacon(); return
+        }
+        if (!Beacon.supported(this)) {
+            Toast.makeText(this, "This phone can’t broadcast a Bluetooth beacon.", Toast.LENGTH_LONG).show()
+            tellBeacon(); return
+        }
+        if (Beacon.adapter(this)?.isEnabled != true) {
+            Toast.makeText(this, "Turn Bluetooth on, then tap Start again.", Toast.LENGTH_LONG).show()
+            try { startActivity(Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS)) } catch (_: Exception) {}
+            tellBeacon(); return
+        }
+        Beacon.start(this, code, name)
+        handler.postDelayed({ tellBeacon() }, 1200)
+    }
+
+    private inner class BeaconBridge {
+        @JavascriptInterface
+        fun state(): String = Beacon.stateJson(this@ShellActivity)
+
+        @JavascriptInterface
+        fun start(code: String, name: String) {
+            if (!Regex("^[A-Z2-9]{8}$").matches(code)) return
+            runOnUiThread { beaconAsk(code, name.take(60)) }
+        }
+
+        @JavascriptInterface
+        fun stop() {
+            runOnUiThread { Beacon.stop(this@ShellActivity); handler.postDelayed({ tellBeacon() }, 400) }
+        }
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -133,6 +193,7 @@ class ShellActivity : ComponentActivity() {
             setSupportZoom(false)
             builtInZoomControls = false
         }
+        if (BuildConfig.APP_KIND == "Partner") web.addJavascriptInterface(BeaconBridge(), "NiroBeacon")
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val u = request.url
@@ -315,6 +376,7 @@ class ShellActivity : ComponentActivity() {
         super.onResume()
         web.onResume()
         handler.post(poll)
+        tellBeacon()
     }
 
     override fun onPause() {

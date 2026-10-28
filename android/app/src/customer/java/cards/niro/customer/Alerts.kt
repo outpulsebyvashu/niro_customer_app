@@ -179,10 +179,12 @@ object Geo {
     fun set(ctx: Context, json: String) {
         prefs(ctx).edit().putString("fences", json).apply()
         apply(ctx)
+        BeaconScan.apply(ctx)
     }
 
     fun clear(ctx: Context) {
         prefs(ctx).edit().remove("fences").apply()
+        BeaconScan.stop(ctx)
         try {
             LocationServices.getGeofencingClient(ctx).removeGeofences(pending(ctx))
         } catch (_: Throwable) {
@@ -305,6 +307,7 @@ class BootReceiver : BroadcastReceiver() {
             try {
                 Notifier.channels(app)
                 Geo.apply(app)
+                BeaconScan.apply(app)
             } finally {
                 result.finish()
             }
