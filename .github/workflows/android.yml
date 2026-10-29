@@ -53,3 +53,5 @@ jobs:
             --title "Niro apps 1.0.${{ github.run_number }}" \
             --notes "Three independent Android apps: Niro-beta (customers), Niro Partner (business owners), Niro Workforce (staff). Each opens its live site, so web updates need no new APK." \
             --latest
+
+# Rebuild trigger: Workforce and Partner apps updated (staff PIN sign-in, beacon controls).
