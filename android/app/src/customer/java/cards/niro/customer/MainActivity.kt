@@ -105,6 +105,7 @@ class MainActivity : ComponentActivity() {
         }
         val app = applicationContext
         Thread { Net.remember(app); Geo.apply(app); BeaconScan.apply(app); Push.sync(app) }.start()
+        BeaconScan.startLive(this)
         tellWeb()
     }
 
@@ -481,10 +482,12 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         web.onResume()
         handler.post(barPoll)
+        BeaconScan.startLive(this)
     }
 
     override fun onPause() {
         handler.removeCallbacks(barPoll)
+        BeaconScan.stopLive(this)
         CookieManager.getInstance().flush()
         web.onPause()
         super.onPause()

@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.le.BluetoothLeScanner
+import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
@@ -60,6 +61,45 @@ object BeaconScan {
         }
     }
 
+    private var live: ScanCallback? = null
+
+    /** While Niro is open: a fast scan, so a nearby beacon is noticed straight away (the background scan can be slow on some phones). */
+    @SuppressLint("MissingPermission")
+    fun startLive(ctx: Context) {
+        if (live != null || !Net.signedIn(ctx) || !canScan(ctx)) return
+        val sc = scanner(ctx) ?: return
+        val app = ctx.applicationContext
+        val cb = object : ScanCallback() {
+            override fun onScanResult(callbackType: Int, result: ScanResult) {
+                val code = BeaconProtocol.parse(result.scanRecord?.getServiceData(BeaconProtocol.SERVICE_UUID)) ?: return
+                Thread {
+                    try {
+                        BeaconReceiver.heard(app, code)
+                    } catch (_: Throwable) {
+                    }
+                }.start()
+            }
+        }
+        try {
+            val filter = ScanFilter.Builder()
+                .setServiceData(BeaconProtocol.SERVICE_UUID, byteArrayOf(BeaconProtocol.MAGIC), byteArrayOf(0xFF.toByte()))
+                .build()
+            sc.startScan(listOf(filter), ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), cb)
+            live = cb
+        } catch (_: Throwable) {
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    fun stopLive(ctx: Context) {
+        val cb = live ?: return
+        live = null
+        try {
+            if (canScan(ctx)) scanner(ctx)?.stopScan(cb)
+        } catch (_: Throwable) {
+        }
+    }
+
     @SuppressLint("MissingPermission")
     fun stop(ctx: Context) {
         try {
@@ -98,7 +138,7 @@ class BeaconReceiver : BroadcastReceiver() {
         val result = goAsync()
         Thread {
             try {
-                codes.forEach { heard(app, it) }
+                codes.forEach { BeaconReceiver.heard(app, it) }
             } catch (_: Throwable) {
             } finally {
                 result.finish()
@@ -106,19 +146,31 @@ class BeaconReceiver : BroadcastReceiver() {
         }.start()
     }
 
-    /** A cafe beacon is nearby: ask the server (it applies the same-cafe-once and 2-a-day limits), then alert. */
-    private fun heard(ctx: Context, code: String) {
-        val p = ctx.getSharedPreferences("niro_native", Context.MODE_PRIVATE)
-        val key = "bsent-" + Geo.istDay() + "-" + code
-        if (p.getBoolean(key, false)) return
-        val r = Net.call(ctx, "POST", "/api/beacon-alerts", JSONObject().put("code", code).toString()) ?: return
-        if (r.first == 401) return
-        p.edit().putBoolean(key, true).apply()
-        if (r.first != 200) return
-        val res = JSONObject(r.second)
-        if (!res.optBoolean("allowed")) return
-        val cafe = res.optJSONObject("cafe") ?: return
-        val offer = cafe.optString("offer").ifBlank { "Show your Niro card and collect a stamp." }
-        Notifier.show(ctx, Notifier.OFFERS, "You’re at " + cafe.optString("name", "a partner cafe"), offer, code.hashCode())
+    companion object {
+        /**
+         * A cafe beacon is nearby: ask the server (it applies the same-cafe-once and 2-a-day limits and the cafe's own switches), then alert.
+         * Settled answers are remembered for the day; a "not now" answer (paused, closed) is retried after two minutes.
+         */
+        fun heard(ctx: Context, code: String) {
+            val p = ctx.getSharedPreferences("niro_native", Context.MODE_PRIVATE)
+            val key = "bsent-" + Geo.istDay() + "-" + code
+            if (p.getBoolean(key, false)) return
+            val now = System.currentTimeMillis()
+            if (now - p.getLong("btry-" + code, 0L) < 120_000L) return
+            p.edit().putLong("btry-" + code, now).apply()
+            val r = Net.call(ctx, "POST", "/api/beacon-alerts", JSONObject().put("code", code).toString()) ?: return
+            if (r.first != 200) return
+            val res = JSONObject(r.second)
+            if (!res.optBoolean("allowed")) {
+                when (res.optString("reason")) {
+                    "already", "daily_limit", "off" -> p.edit().putBoolean(key, true).apply()
+                }
+                return
+            }
+            p.edit().putBoolean(key, true).apply()
+            val cafe = res.optJSONObject("cafe") ?: return
+            val offer = cafe.optString("offer").ifBlank { "Show your Niro card and collect a stamp." }
+            Notifier.show(ctx, Notifier.OFFERS, "You’re at " + cafe.optString("name", "a partner cafe"), offer, code.hashCode())
+        }
     }
 }
