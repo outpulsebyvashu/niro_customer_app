@@ -79,14 +79,14 @@ class ShellActivity : ComponentActivity() {
         fileCallback = null
     }
 
-    /* Partner app only: lets the cafe's phone broadcast the Niro Bluetooth beacon. */
+    /* Partner and Workforce apps: let the cafe's phone (owner or on-shift staff) broadcast the Niro Bluetooth beacon. */
     private var pendingBeacon: Pair<String, String>? = null
     private val beaconPerm = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { beginBeaconIfReady() }
 
     private fun granted(p: String) = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
 
     private fun tellBeacon() {
-        if (BuildConfig.APP_KIND != "Partner") return
+        if (BuildConfig.APP_KIND != "Partner" && BuildConfig.APP_KIND != "Workforce") return
         web.evaluateJavascript("window.__niroBeacon&&window.__niroBeacon(" + Beacon.stateJson(this) + ")", null)
     }
 
@@ -193,7 +193,7 @@ class ShellActivity : ComponentActivity() {
             setSupportZoom(false)
             builtInZoomControls = false
         }
-        if (BuildConfig.APP_KIND == "Partner") web.addJavascriptInterface(BeaconBridge(), "NiroBeacon")
+        if (BuildConfig.APP_KIND == "Partner" || BuildConfig.APP_KIND == "Workforce") web.addJavascriptInterface(BeaconBridge(), "NiroBeacon")
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val u = request.url
